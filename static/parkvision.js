@@ -394,23 +394,61 @@ recalcValidity();
 const EMP_UPI_RE = /^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/;
 const EMP_TXN_RE = /^[A-Za-z0-9]{8,30}$/;
 
+// Cash skips the UPI fields entirely (no VPA, no provider txn ID to capture).
+// Anything else in this set is a UPI provider and requires both.
+const UPI_PAYMENT_METHODS = new Set([
+  'PhonePe', 'Paytm', 'Google Pay', 'BHIM', 'Amazon Pay', 'Other UPI'
+]);
+
+function syncUpiVisibility() {
+  const method = $('emp-pay-method') ? $('emp-pay-method').value : '';
+  const wrap   = $('upi-fields');
+  if (!wrap) return;
+  const upiInput = $('emp-pay-upi');
+  const txnInput = $('emp-pay-txn');
+  if (UPI_PAYMENT_METHODS.has(method)) {
+    wrap.style.display = '';
+    if (upiInput) { upiInput.required = true;  upiInput.disabled = false; }
+    if (txnInput) { txnInput.required = true;  txnInput.disabled = false; }
+  } else {
+    // Cash (or unselected) — hide the UPI block and disable+blank the inputs so
+    // (a) the form's required-validity doesn't gate on hidden fields, and
+    // (b) stale values from a previous UPI selection don't get submitted.
+    wrap.style.display = 'none';
+    if (upiInput) { upiInput.required = false; upiInput.disabled = true;  upiInput.value = ''; }
+    if (txnInput) { txnInput.required = false; txnInput.disabled = true;  txnInput.value = ''; }
+  }
+}
+
 function setSubmitState() {
-  const hasTag  = !!$('emp-tag').value.trim();
-  const method  = $('emp-pay-method') ? $('emp-pay-method').value : '';
-  const amount  = $('emp-pay-amount') ? parseInt($('emp-pay-amount').value, 10) : 0;
-  const upi     = $('emp-pay-upi') ? $('emp-pay-upi').value.trim() : '';
-  const txn     = $('emp-pay-txn') ? $('emp-pay-txn').value.trim() : '';
-  const payOk   = !!method && amount > 0 && EMP_UPI_RE.test(upi) && EMP_TXN_RE.test(txn);
+  const hasTag = !!$('emp-tag').value.trim();
+  const method = $('emp-pay-method') ? $('emp-pay-method').value : '';
+  const amount = $('emp-pay-amount') ? parseInt($('emp-pay-amount').value, 10) : 0;
+  if (!method || !(amount > 0)) {
+    $('emp-submit').disabled = !hasTag || true;
+    return;
+  }
+  let payOk;
+  if (UPI_PAYMENT_METHODS.has(method)) {
+    const upi = $('emp-pay-upi') ? $('emp-pay-upi').value.trim() : '';
+    const txn = $('emp-pay-txn') ? $('emp-pay-txn').value.trim() : '';
+    payOk = EMP_UPI_RE.test(upi) && EMP_TXN_RE.test(txn);
+  } else {
+    // Cash — amount alone is sufficient.
+    payOk = true;
+  }
   $('emp-submit').disabled = !(hasTag && payOk);
 }
 
-// Re-check button state whenever any payment field changes.
+// Re-check button state + UPI visibility whenever any payment field changes.
 ['emp-pay-method', 'emp-pay-amount', 'emp-pay-upi', 'emp-pay-txn'].forEach(id => {
   const el = $(id);
   if (!el) return;
-  el.addEventListener('input',  setSubmitState);
-  el.addEventListener('change', setSubmitState);
+  el.addEventListener('input',  () => { syncUpiVisibility(); setSubmitState(); });
+  el.addEventListener('change', () => { syncUpiVisibility(); setSubmitState(); });
 });
+// Run once on load so an unselected method already hides the UPI block.
+syncUpiVisibility();
 
 function clearEmpForm() {
   $('emp-name').value    = '';

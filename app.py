@@ -1837,8 +1837,12 @@ def api_employees():
         except (TypeError, ValueError):
             payment_amount = 0
 
-        ALLOWED_METHODS = {'PhonePe', 'Paytm', 'Google Pay', 'BHIM',
+        ALLOWED_METHODS = {'Cash', 'PhonePe', 'Paytm', 'Google Pay', 'BHIM',
                            'Amazon Pay', 'Other UPI'}
+        # Methods that REQUIRE a UPI ID + provider transaction ID. Cash is
+        # excluded — there is no digital reference to capture.
+        UPI_METHODS = {'PhonePe', 'Paytm', 'Google Pay', 'BHIM',
+                       'Amazon Pay', 'Other UPI'}
         # UPI VPA spec: <handle>@<provider>, handle 2-256 chars alphanumeric/._-,
         # provider 2-64 chars starting with a letter. e.g. 9876543210@ybl
         UPI_RE = re.compile(r'^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$')
@@ -1849,19 +1853,29 @@ def api_employees():
         if payment_method not in ALLOWED_METHODS:
             return jsonify({"status": "error",
                             "message": "Select a valid payment method "
-                                       "(PhonePe / Paytm / Google Pay / BHIM / "
-                                       "Amazon Pay / Other UPI)"}), 400
-        if not UPI_RE.match(upi_id):
-            return jsonify({"status": "error",
-                            "message": "UPI ID must look like 'name@provider' "
-                                       "(e.g. 9876543210@ybl)"}), 400
-        if not TXN_RE.match(transaction_id):
-            return jsonify({"status": "error",
-                            "message": "Transaction ID must be 8-30 "
-                                       "alphanumeric characters"}), 400
+                                       "(Cash / PhonePe / Paytm / Google Pay / "
+                                       "BHIM / Amazon Pay / Other UPI)"}), 400
         if payment_amount <= 0:
             return jsonify({"status": "error",
                             "message": "Payment amount must be greater than 0"}), 400
+
+        if payment_method in UPI_METHODS:
+            # Digital payments must have a valid UPI VPA + a unique
+            # provider-issued transaction reference. Both are saved so
+            # finance can reconcile against the provider's statement.
+            if not UPI_RE.match(upi_id):
+                return jsonify({"status": "error",
+                                "message": "UPI ID must look like 'name@provider' "
+                                           "(e.g. 9876543210@ybl)"}), 400
+            if not TXN_RE.match(transaction_id):
+                return jsonify({"status": "error",
+                                "message": "Transaction ID must be 8-30 "
+                                           "alphanumeric characters"}), 400
+        else:
+            # Cash: no UPI handle, no provider transaction. Clear any value
+            # the client may have sent so the DB stays clean.
+            upi_id         = None
+            transaction_id = None
 
         now = datetime.now()
         from dateutil.relativedelta import relativedelta
@@ -1895,14 +1909,18 @@ def api_employees():
             if plate_clash:
                 return jsonify({"status": "error",
                                 "message": f"Plate {plate_c} is already enrolled"}), 400
-            # Block duplicate transaction IDs: a single UPI txn reference can
-            # only enroll one employee. Catches accidental re-use and basic fraud.
-            txn_clash = Whitelist.query.filter(
-                Whitelist.transaction_id == transaction_id).first()
-            if txn_clash:
-                return jsonify({"status": "error",
-                                "message": f"Transaction ID {transaction_id} "
-                                           f"already used for another enrollment"}), 400
+            # Block duplicate UPI transaction IDs: a single provider txn
+            # reference can only enroll one employee. Catches accidental
+            # re-use and basic fraud. Cash payments have transaction_id=NULL
+            # so the check is skipped — many Cash rows can legitimately
+            # share "no transaction id".
+            if transaction_id:
+                txn_clash = Whitelist.query.filter(
+                    Whitelist.transaction_id == transaction_id).first()
+                if txn_clash:
+                    return jsonify({"status": "error",
+                                    "message": f"Transaction ID {transaction_id} "
+                                               f"already used for another enrollment"}), 400
             row = Whitelist(
                 rfid_tag         = rfid_tag,
                 number_plate     = plate_c,

@@ -823,3 +823,98 @@ td, th, .epc, code, .scan-row dd,
   .panel { padding: 12px; }
   h1 { font-size: 1.3rem; }
 }
+
+/* ──────────────────────────────────────────────────────────────────────
+   Reports → Detailed View tables.
+   Both the Gate Access Events table and the Monthly Transactions table
+   carry ~11 columns. Without explicit widths the browser squishes mid-
+   width columns (Department / Contact / Mode) so the row looks ragged.
+   These rules give each column breathing room, align the numeric/time
+   columns with tabular-nums, and add a subtle zebra so the eye can
+   track across the row.
+   ────────────────────────────────────────────────────────────────────── */
+#rpt-detail-table,
+#rpt-access-events table {
+  /* Below this width, the .table-wrap scrolls horizontally instead of
+     collapsing columns. Picked to fit all 11 columns on a 1366px laptop
+     without scroll, scroll on narrower screens. */
+  min-width: 1020px;
+}
+
+#rpt-detail-table th,
+#rpt-detail-table td,
+#rpt-access-events th,
+#rpt-access-events td {
+  padding: 14px 16px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+#rpt-detail-table th,
+#rpt-access-events th {
+  background: #f4f7fa;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Subtle zebra striping — only on the dense report tables. Helps the eye
+   track across 11 columns without being noisy elsewhere. */
+#rpt-detail-table tbody tr:nth-child(even),
+#rpt-access-events tbody tr:nth-child(even) {
+  background: #fafbfd;
+}
+
+/* Tabular-nums on time / date / duration cells so digits line up vertically
+   instead of dancing as widths vary character to character. */
+#rpt-detail-table td:nth-child(1),   /* Date     */
+#rpt-detail-table td:nth-child(8),   /* Entry    */
+#rpt-detail-table td:nth-child(9),   /* Exit     */
+#rpt-detail-table td:nth-child(10),  /* Duration */
+#rpt-access-events td:nth-child(1),  /* Scan Time*/
+#rpt-access-events td:nth-child(8),  /* Entry    */
+#rpt-access-events td:nth-child(9),  /* Exit     */
+#rpt-access-events td:nth-child(10) {/* Duration */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Plate / Tag / Identity columns: monospace + smaller so the codes are
+   visually distinct and stay one-line. */
+#rpt-detail-table td:nth-child(2),   /* Vehicle  */
+#rpt-detail-table td:nth-child(7),   /* Identity */
+#rpt-access-events td:nth-child(2),  /* Plate    */
+#rpt-access-events td:nth-child(3) { /* Tag (EPC)*/
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.88em;
+}
+
+/* Per-column min-widths — Monthly Transactions table. */
+#rpt-detail-table th:nth-child(1),  #rpt-detail-table td:nth-child(1)  { min-width: 110px; }
+#rpt-detail-table th:nth-child(2),  #rpt-detail-table td:nth-child(2)  { min-width: 130px; }
+#rpt-detail-table th:nth-child(3),  #rpt-detail-table td:nth-child(3)  { min-width: 140px; }
+#rpt-detail-table th:nth-child(4),  #rpt-detail-table td:nth-child(4)  { min-width: 70px;  }
+#rpt-detail-table th:nth-child(5),  #rpt-detail-table td:nth-child(5)  { min-width: 140px; }
+#rpt-detail-table th:nth-child(6),  #rpt-detail-table td:nth-child(6)  { min-width: 90px;  }
+#rpt-detail-table th:nth-child(7),  #rpt-detail-table td:nth-child(7)  { min-width: 110px; }
+#rpt-detail-table th:nth-child(8),  #rpt-detail-table td:nth-child(8)  { min-width: 110px; }
+#rpt-detail-table th:nth-child(9),  #rpt-detail-table td:nth-child(9)  { min-width: 110px; }
+#rpt-detail-table th:nth-child(10), #rpt-detail-table td:nth-child(10) { min-width: 90px;  }
+#rpt-detail-table th:nth-child(11), #rpt-detail-table td:nth-child(11) { min-width: 70px;  text-align: center; }
+
+/* Per-column min-widths — Gate Access Events table. */
+#rpt-access-events th:nth-child(1),  #rpt-access-events td:nth-child(1)  { min-width: 150px; }
+#rpt-access-events th:nth-child(2),  #rpt-access-events td:nth-child(2)  { min-width: 130px; }
+#rpt-access-events th:nth-child(3),  #rpt-access-events td:nth-child(3)  { min-width: 130px; }
+#rpt-access-events th:nth-child(4),  #rpt-access-events td:nth-child(4)  { min-width: 140px; }
+#rpt-access-events th:nth-child(5),  #rpt-access-events td:nth-child(5)  { min-width: 120px; }
+#rpt-access-events th:nth-child(6),  #rpt-access-events td:nth-child(6)  { min-width: 120px; }
+#rpt-access-events th:nth-child(7),  #rpt-access-events td:nth-child(7)  { min-width: 70px;  }
+#rpt-access-events th:nth-child(8),  #rpt-access-events td:nth-child(8)  { min-width: 110px; }
+#rpt-access-events th:nth-child(9),  #rpt-access-events td:nth-child(9)  { min-width: 110px; }
+#rpt-access-events th:nth-child(10), #rpt-access-events td:nth-child(10) { min-width: 90px;  }
+#rpt-access-events th:nth-child(11), #rpt-access-events td:nth-child(11) { min-width: 100px; text-align: center; }
+
+/* Smooth horizontal-scroll affordance when the page is narrower than the
+   1020px min-width above. Thin scrollbar keeps the visual quiet. */
+.rpt-view-pane .table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
