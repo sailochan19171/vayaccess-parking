@@ -196,48 +196,15 @@
                         </div>
                     </div>
 
-                    <!-- ── 3 · Payment ─────────────────────────────────────── -->
-                    <div style="margin-top: 18px; padding-top: 18px;
-                                border-top: 1px dashed rgba(255,255,255,0.08);">
-                        <h2 style="margin: 0 0 6px; font-size: 1.05em;">3 · Payment Confirmation</h2>
-                        <div class="sub" style="margin-bottom: 14px;">
-                            Activation is gated on a verified UPI payment. Both
-                            the UPI ID and the transaction reference are saved
-                            with the whitelist entry.
-                        </div>
-                        <div class="form-grid">
-                            <div>
-                                <label>Payment Method *</label>
-                                <select id="payment_method" required>
-                                    <option value="" selected disabled>— Select method —</option>
-                                    <option value="PhonePe">PhonePe</option>
-                                    <option value="Paytm">Paytm</option>
-                                    <option value="Google Pay">Google Pay</option>
-                                    <option value="BHIM">BHIM</option>
-                                    <option value="Amazon Pay">Amazon Pay</option>
-                                    <option value="Other UPI">Other UPI</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label>Amount Paid (₹) *</label>
-                                <input type="number" id="payment_amount" required min="1" step="1"
-                                       placeholder="e.g. 2500">
-                            </div>
-                            <div>
-                                <label>UPI ID *</label>
-                                <input type="text" id="upi_id" required
-                                       placeholder="e.g. 9876543210@ybl"
-                                       pattern="[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}"
-                                       title="Format: name@provider — e.g. 9876543210@ybl">
-                            </div>
-                            <div>
-                                <label>Transaction ID *</label>
-                                <input type="text" id="transaction_id" required
-                                       placeholder="e.g. T2402151234567890"
-                                       pattern="[A-Za-z0-9]{8,30}"
-                                       title="8-30 alphanumeric characters (provider-issued reference)">
-                            </div>
-                        </div>
+                    <div style="margin-top: 14px; padding: 12px 14px;
+                                background: rgba(245,158,11,0.10);
+                                border:1px solid rgba(245,158,11,0.35);
+                                border-radius: 10px; color:#fbbf24; font-size: 0.85em;">
+                        <b>Payment-gated enrollment</b> — new activations are
+                        recorded from the <b>Admin tab</b> in the main shell,
+                        which collects the UPI payment alongside employee
+                        details. This page is kept for tag scanning only.
+                        <a href="/#admin" style="color:#fbbf24; font-weight:700;">Open Admin tab →</a>
                     </div>
 
                     <div class="btn-row">
@@ -286,27 +253,10 @@ function showToast(msg, kind = 'ok') {
     setTimeout(() => { t.className = `toast ${kind}`; }, 3200);
 }
 
-// Mirror the server-side regex so we don't enable the button for inputs the
-// backend will reject. Keeps the UX honest without an extra round-trip.
-const UPI_RE = /^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/;
-const TXN_RE = /^[A-Za-z0-9]{8,30}$/;
-
 function setActivateBtnState() {
-    const hasTag      = $('rfid_tag').value.trim().length > 0;
-    const method      = $('payment_method').value;
-    const amount      = parseInt($('payment_amount').value, 10);
-    const upi         = $('upi_id').value.trim();
-    const txn         = $('transaction_id').value.trim();
-    const paymentOk   = !!method && amount > 0 && UPI_RE.test(upi) && TXN_RE.test(txn);
-    $('btnActivate').disabled = !(hasTag && paymentOk);
+    const hasTag = $('rfid_tag').value.trim().length > 0;
+    $('btnActivate').disabled = !hasTag;
 }
-
-// Re-check button state whenever any payment field changes so it enables/
-// disables in real time as the operator fills the form.
-['payment_method', 'payment_amount', 'upi_id', 'transaction_id'].forEach(id => {
-    $(id).addEventListener('input',  setActivateBtnState);
-    $(id).addEventListener('change', setActivateBtnState);
-});
 
 function fmtDate(d) {
     return d.toISOString().slice(0, 10);
@@ -457,10 +407,6 @@ $('empForm').addEventListener('submit', async (e) => {
         activation_months: parseInt($('activation_months').value, 10),
         number_plate:      $('number_plate').value.trim(),
         vehicle_type:      $('vehicle_type').value,
-        payment_method:    $('payment_method').value,
-        payment_amount:    parseInt($('payment_amount').value, 10) || 0,
-        upi_id:            $('upi_id').value.trim(),
-        transaction_id:    $('transaction_id').value.trim(),
     };
     $('btnActivate').disabled = true;
     $('btnActivate').textContent = 'Activating…';
