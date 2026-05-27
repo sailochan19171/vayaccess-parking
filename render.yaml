@@ -1,0 +1,22 @@
+# One-click deploy on Render.com — free tier.
+# After pushing this repo to GitHub:
+#   1. Render dashboard → New + → Blueprint
+#   2. Connect your GitHub repo, pick this folder as root
+#   3. Click "Apply" — Render reads this file and creates the web service.
+# Free dynos sleep after 15 min of no traffic; first request takes ~30 s to wake.
+# DATABASE_URL must be set in the Render dashboard to your Neon connection string.
+services:
+  - type: web
+    name: vayaccess-cloud
+    runtime: python
+    plan: free
+    region: singapore           # closest free region to India; use 'oregon' for US.
+    buildCommand: "pip install -r requirements-cloud.txt"
+    startCommand: "waitress-serve --host=0.0.0.0 --port=$PORT --threads=8 app:app"
+    envVars:
+      - key: CLOUD_MODE
+        value: "1"
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DATABASE_URL
+        sync: false             # set this manually in the Render dashboard.

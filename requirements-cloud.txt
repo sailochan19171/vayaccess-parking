@@ -1,0 +1,10 @@
+# Cloud deployment requirements — admin/reports/API only, no ML, no hardware.
+# Use this on Render/Fly/Koyeb. Pair with CLOUD_MODE=1 env var.
+# On-site deploys (with camera + readers) should keep using requirements.txt.
+
+Flask==3.0.3
+flask-sqlalchemy==3.1.1
+SQLAlchemy==2.0.35
+psycopg2-binary==2.9.9
+python-dateutil==2.9.0
+waitress==3.0.0

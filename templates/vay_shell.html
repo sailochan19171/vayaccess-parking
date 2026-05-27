@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VAY ParkOps Control</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="brand-logo" src="assets/vay-logo.jpeg" alt="VAY logo">
+          <div>
+            <strong>VAY ParkOps</strong>
+            <span>Parking Management</span>
+          </div>
+        </div>
+        <nav aria-label="Primary">
+          <button class="nav-item active" data-view="dashboard">Dashboard</button>
+          <button class="nav-item" data-view="entry">Entry</button>
+          <button class="nav-item" data-view="exit">Exit</button>
+          <button class="nav-item" data-view="tariffs">Tariffs</button>
+          <button class="nav-item" data-view="devices">Devices</button>
+          <button class="nav-item" data-view="reports">Reports</button>
+          <button class="nav-item" data-view="admin">Admin</button>
+        </nav>
+        <div class="operator-panel">
+          <span>Signed in as</span>
+          <strong>Supervisor</strong>
+          <small>Gate A • Shift 2</small>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">VAY ParkOps Control</p>
+            <h1 id="view-title">Dashboard</h1>
+          </div>
+          <div class="top-actions">
+            <span id="clock"></span>
+            <button class="ghost-button" id="seed-data">Reload Demo</button>
+          </div>
+        </header>
+
+        <section id="dashboard" class="view active">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>Occupancy</span>
+              <strong id="metric-occupancy">0 / 0</strong>
+              <div class="meter"><i id="occupancy-bar"></i></div>
+            </article>
+            <article class="metric">
+              <span>Available Slots</span>
+              <strong id="metric-available">0</strong>
+              <small>Across all zones</small>
+            </article>
+            <article class="metric">
+              <span>Today Revenue</span>
+              <strong id="metric-revenue">₹0</strong>
+              <small>Paid exits only</small>
+            </article>
+            <article class="metric">
+              <span>Active Devices</span>
+              <strong id="metric-devices">0</strong>
+              <small>Readers, cameras, barriers</small>
+            </article>
+          </div>
+
+          <div class="dashboard-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Current Vehicles</h2>
+                <input id="vehicle-search" type="search" placeholder="Search vehicle, tag, ticket">
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Vehicle</th>
+                      <th>Type</th>
+                      <th>Entry</th>
+                      <th>Identity</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="active-vehicles"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Gate Activity</h2>
+                <span id="activity-count"></span>
+              </div>
+              <div id="activity-feed" class="activity-feed"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="entry" class="view">
+          <div class="form-layout">
+            <form id="entry-form" class="panel form-panel">
+              <h2>Register Entry</h2>
+              <label>Vehicle Number<input name="vehicle" required placeholder="MH12AB1234"></label>
+              <label>Vehicle Type
+                <select name="type">
+                  <option>Car</option>
+                  <option>Bike</option>
+                  <option>Truck</option>
+                  <option>EV</option>
+                </select>
+              </label>
+              <label>Identification Mode
+                <select name="mode">
+                  <option>RFID/UHF</option>
+                  <option>QR Code</option>
+                  <option>ANPR</option>
+                  <option>Manual Ticket</option>
+                </select>
+              </label>
+              <label>Tag / QR / Ticket ID<input name="identity" required placeholder="TAG-1009"></label>
+              <label>Zone
+                <select name="zone">
+                  <option>Basement A</option>
+                  <option>Basement B</option>
+                  <option>Visitor Deck</option>
+                  <option>Monthly Pass</option>
+                  <option>Staff Parking</option>
+                </select>
+              </label>
+              <label class="check-row"><input type="checkbox" name="vip"> Whitelist or VIP vehicle</label>
+              <label class="check-row"><input type="checkbox" name="staff"> Staff free parking</label>
+              <button type="submit">Open Barrier & Log Entry</button>
+            </form>
+
+            <section class="panel">
+              <h2>Entry Controls</h2>
+              <div class="control-grid">
+                <button class="action-button" data-sim="rfid">RFID Scan</button>
+                <button class="action-button" data-sim="qr">QR Scan</button>
+                <button class="action-button" data-sim="anpr">ANPR Read</button>
+                <button class="action-button" data-sim="ticket">Print Ticket</button>
+              </div>
+              <div class="gate-state">
+                <span>Gate A</span>
+                <strong id="gate-state">Ready</strong>
+              </div>
+              <p class="hint">Simulated controls update the forms and audit trail so the workflow can be tested without connected hardware.</p>
+            </section>
+          </div>
+        </section>
+
+        <section id="exit" class="view">
+          <div class="form-layout">
+            <form id="exit-form" class="panel form-panel">
+              <h2>Process Exit</h2>
+              <label>Vehicle / Tag / Ticket<input name="query" required placeholder="Search active vehicle"></label>
+              <label>Payment Method
+                <select name="payment">
+                  <option>UPI</option>
+                  <option>Cash</option>
+                  <option>Card</option>
+                  <option>Wallet</option>
+                  <option>Subscription</option>
+                </select>
+              </label>
+              <label class="check-row"><input type="checkbox" name="lost"> Lost ticket charge</label>
+              <button type="submit">Calculate & Close Ticket</button>
+            </form>
+
+            <section class="panel receipt" id="receipt">
+              <h2>Receipt Preview</h2>
+              <dl>
+                <dt>Vehicle</dt><dd id="receipt-vehicle">Select a vehicle</dd>
+                <dt>Duration</dt><dd id="receipt-duration">-</dd>
+                <dt>Tariff</dt><dd id="receipt-tariff">-</dd>
+                <dt>Total</dt><dd id="receipt-total">₹0</dd>
+              </dl>
+              <button class="ghost-button" id="print-receipt">Print Thermal Receipt</button>
+            </section>
+          </div>
+        </section>
+
+        <section id="tariffs" class="view">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Tariff Engine</h2>
+              <button id="add-tariff" class="ghost-button">Add Rule</button>
+            </div>
+            <div id="tariff-list" class="tariff-list"></div>
+          </div>
+        </section>
+
+        <section id="devices" class="view">
+          <div class="device-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Hardware Status</h2>
+                <button id="poll-devices" class="ghost-button">Poll Devices</button>
+              </div>
+              <div id="device-list" class="device-list"></div>
+            </section>
+
+            <section class="panel">
+              <h2>UHF Protocol Utility</h2>
+              <label>Command
+                <select id="uhf-command">
+                  <option value="03">Get Module Info (0x03)</option>
+                  <option value="3B">Set Power (0x3B)</option>
+                  <option value="C1">Start Inventory (0xC1)</option>
+                  <option value="C8">Single Tag Inventory (0xC8)</option>
+                </select>
+              </label>
+              <label>Payload Hex<input id="uhf-payload" placeholder="Optional, e.g. 1E for power"></label>
+              <button id="build-frame">Build Command Frame</button>
+              <pre id="uhf-frame">AA AA ... CRC</pre>
+              <p class="hint">Frames use header AA AA and CRC-CCITT validation as listed in the SRS.</p>
+            </section>
+          </div>
+        </section>
+
+        <section id="reports" class="view">
+          <div class="report-controls panel">
+            <div>
+              <h2>Report Center</h2>
+              <p class="hint">Vehicle movement and payment summaries for operations and finance review.</p>
+            </div>
+            <div class="report-actions">
+              <label>Report Date<input id="report-date" type="date"></label>
+              <button id="export-excel" class="ghost-button" type="button">Export Excel</button>
+              <button id="export-pdf" class="ghost-button" type="button">Export PDF</button>
+            </div>
+          </div>
+          <div class="report-grid">
+            <section class="panel">
+              <h2>Hourly Vehicle Count</h2>
+              <div id="hourly-chart" class="bar-chart"></div>
+            </section>
+            <section class="panel">
+              <h2>Payment by Shift</h2>
+              <div id="shift-chart" class="bar-chart"></div>
+            </section>
+            <section class="panel">
+              <h2>Payment by Day</h2>
+              <div id="daily-chart" class="bar-chart"></div>
+            </section>
+            <section class="panel">
+              <h2>Payment by Month</h2>
+              <div id="monthly-chart" class="bar-chart"></div>
+            </section>
+            <section class="panel">
+              <h2>Payment Method Split</h2>
+              <div id="payment-chart" class="bar-chart"></div>
+            </section>
+            <section class="panel">
+              <h2>Audit Logs</h2>
+              <div id="audit-list" class="audit-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="admin" class="view">
+          <div class="admin-grid">
+            <section class="panel">
+              <h2>Users & Roles</h2>
+              <div class="role-list">
+                <span>Administrator</span>
+                <span>Operator</span>
+                <span>Supervisor</span>
+                <span>Finance</span>
+                <span>Security</span>
+                <span>Staff Free Parking</span>
+              </div>
+            </section>
+            <section class="panel">
+              <h2>Facility Settings</h2>
+              <label>Total Capacity<input id="capacity-input" type="number" min="1"></label>
+              <label>Backup Schedule
+                <select>
+                  <option>Daily at 02:00</option>
+                  <option>Every 6 hours</option>
+                  <option>Manual only</option>
+                </select>
+              </label>
+              <button id="save-settings">Save Settings</button>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

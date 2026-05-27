@@ -1,0 +1,1153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VayAccess Systems · Parking Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+      /* ParkVision-specific add-ons on top of the VAY base styles */
+      .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
+                               overflow: hidden; aspect-ratio: 16/9; }
+      .live-feed-wrap img    { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .live-hud-status       { position: absolute; top: 14px; right: 14px;
+                               background: rgba(15,23,42,0.85); border-radius: 16px;
+                               padding: 5px 12px; display: flex; align-items: center; gap: 8px;
+                               font-size: 0.78em; font-weight: 700; letter-spacing: 1.5px;
+                               text-transform: uppercase; color: #f8fafc; backdrop-filter: blur(8px); }
+      .live-hud-dot          { width: 8px; height: 8px; border-radius: 50%; background: #2f8b57;
+                               box-shadow: 0 0 8px #2f8b57; }
+      .live-hud-dot.scanning { background: #d5952a; box-shadow: 0 0 8px #d5952a;
+                               animation: pv-pulse 1.5s infinite; }
+      @keyframes pv-pulse    { 0%,100% { opacity: 0.55 } 50% { opacity: 1 } }
+      .scan-row              { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px;
+                               margin-top: 12px; }
+      .scan-row dt           { color: var(--muted); font-size: 0.78em;
+                               text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+      .scan-row dd           { margin: 0 0 8px 0; font-weight: 700; }
+      .scan-row dd.mono      { font-family: 'Consolas','Monaco',monospace; }
+      .scan-status-badge     { padding: 4px 12px; border-radius: 6px; display: inline-block;
+                               font-size: 0.85em; font-weight: 700; }
+      .scan-status-badge.granted  { background: rgba(47,139,87,0.18);  color: #2f8b57; }
+      .scan-status-badge.denied   { background: rgba(183,74,66,0.18);  color: #b74a42; }
+      .scan-status-badge.scanning { background: rgba(213,149,42,0.20); color: #a87217; }
+
+      /* Admin · enrollment widget */
+      .tag-scan-box          { background: linear-gradient(135deg, rgba(18,124,114,0.10), rgba(213,149,42,0.06));
+                               border: 1px dashed rgba(18,124,114,0.45);
+                               border-radius: 14px; padding: 22px; text-align: center; }
+      .tag-scan-box.live     { border-style: solid; border-color: var(--primary);
+                               box-shadow: 0 0 16px rgba(18,124,114,0.18); }
+      .tag-scan-box .epc-label { font-size:0.7em; letter-spacing:2px; text-transform:uppercase;
+                                 opacity:0.6; }
+      .tag-scan-box .epc     { font-family: 'Consolas','Monaco',monospace; font-size: 1.3em;
+                               font-weight: 700; word-break: break-all; margin-top: 8px;
+                               color: var(--text); }
+      .tag-scan-box .epc.idle{ color: var(--muted); font-style: italic; font-weight: 400;
+                               font-family: inherit; font-size: 1em; }
+      .reader-status-pill    { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+                               background: rgba(31,42,39,0.06); border-radius: 10px;
+                               border: 1px solid var(--line); margin-bottom: 12px; font-size: 0.85em; }
+      .reader-status-pill .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+      .reader-status-pill .dot.ok { background: var(--ok); box-shadow: 0 0 10px rgba(47,139,87,0.5); }
+      .reader-status-pill .dot.err{ background: var(--danger); }
+      .renew-banner          { display: none; margin-top: 12px; padding: 10px 12px;
+                               background: rgba(213,149,42,0.10); border: 1px solid rgba(213,149,42,0.4);
+                               border-radius: 8px; color: #8c620b; font-size: 0.88em; }
+      .renew-banner.show     { display: block; }
+      .device-card           { background: var(--panel); border: 1px solid var(--line);
+                               border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+      .device-card-head      { display: flex; align-items: center; justify-content: space-between;
+                               margin-bottom: 8px; }
+      .device-card-head h3   { margin: 0; font-size: 1em; }
+      .device-card-meta      { font-size: 0.82em; color: var(--muted); }
+      .device-state-ok       { color: var(--ok); font-weight: 700; }
+      .device-state-err      { color: var(--danger); font-weight: 700; }
+      .pv-section-title      { margin: 24px 0 12px; font-size: 1em;
+                               text-transform: uppercase; letter-spacing: 1.5px;
+                               color: var(--primary); font-weight: 700; }
+
+      /* ── Reports view (Farmley-style) ──────────────────────────────── */
+      .rpt-header            { display:flex; align-items:center; justify-content:space-between;
+                               padding: 18px 22px; margin-bottom: 14px; }
+      .rpt-header-left       { display:flex; align-items:center; gap: 14px; }
+      .rpt-icon              { width: 48px; height: 48px; border-radius: 12px;
+                               display:flex; align-items:center; justify-content:center;
+                               font-size: 22px; background: rgba(18,124,114,0.10); }
+      .rpt-header h2         { margin:0; font-size: 1.6em; }
+      .rpt-subtitle          { margin: 4px 0 0; color: var(--muted); font-size: 0.9em; }
+      .rpt-header-right      { display:flex; gap: 10px; }
+
+      .rpt-filters           { padding: 18px 22px; margin-bottom: 14px; }
+      .rpt-filters-head      { display:flex; align-items:center; justify-content:space-between;
+                               margin-bottom: 12px; }
+      .rpt-filters-head h3   { margin:0; font-size: 1em; color: var(--muted);
+                               text-transform: uppercase; letter-spacing: 1.5px; }
+      .rpt-filters-grid      { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+      .rpt-filters-grid label{ display:flex; flex-direction:column; gap: 6px;
+                               font-size: 0.78em; color: var(--muted);
+                               text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+
+      .rpt-metric-grid       { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+                               gap: 14px; margin-bottom: 14px; }
+      .rpt-metric            { background: var(--panel); border: 1px solid var(--line);
+                               border-radius: 14px; padding: 18px 20px; box-shadow: var(--shadow); }
+      .rpt-metric-head       { display:flex; align-items:center; justify-content:space-between;
+                               color: var(--muted); font-size: 0.82em; margin-bottom: 6px;
+                               text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+      .rpt-metric-icon       { font-size: 18px; }
+      .rpt-metric strong     { font-size: 2.0em; font-weight: 800; line-height: 1.1; display: block; }
+      .rpt-metric .rpt-ok    { color: var(--ok); }
+      .rpt-metric small      { color: var(--muted); font-size: 0.82em; }
+
+      .rpt-status-grid       { display:grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+                               gap: 12px; margin-bottom: 18px; }
+      .rpt-status            { background: var(--panel); border: 1px solid var(--line);
+                               border-radius: 12px; padding: 14px 16px; }
+      .rpt-status-label      { font-size: 0.75em; font-weight: 800; letter-spacing: 1.5px;
+                               display: block; margin-bottom: 6px; }
+      .rpt-status strong     { font-size: 1.7em; font-weight: 800; display: inline; }
+      .rpt-status-sub        { font-size: 0.78em; color: var(--muted); margin-left: 6px; }
+      .rpt-status small      { color: var(--muted); font-size: 0.78em; display: block; margin-top: 4px; }
+      .rpt-status-present { border-left: 4px solid #2f8b57; }
+      .rpt-status-present .rpt-status-label, .rpt-status-present strong { color: #2f8b57; }
+      .rpt-status-absent  { border-left: 4px solid #b74a42; }
+      .rpt-status-absent  .rpt-status-label, .rpt-status-absent  strong { color: #b74a42; }
+      .rpt-status-leave   { border-left: 4px solid #d5952a; }
+      .rpt-status-leave   .rpt-status-label, .rpt-status-leave   strong { color: #a87217; }
+      .rpt-status-holiday { border-left: 4px solid #7c4dff; }
+      .rpt-status-holiday .rpt-status-label, .rpt-status-holiday strong { color: #5b35cc; }
+      .rpt-status-weekoff { border-left: 4px solid #5c6c66; }
+      .rpt-status-weekoff .rpt-status-label, .rpt-status-weekoff strong { color: #3d4945; }
+
+      .rpt-view-toggle       { display:inline-flex; background: rgba(31,42,39,0.06);
+                               border-radius: 10px; padding: 4px; margin: 0 auto 18px;
+                               display: flex; width: fit-content; }
+      .rpt-view-btn          { background: transparent; color: var(--muted); padding: 8px 22px;
+                               border-radius: 8px; font-weight: 700; min-height: 36px;
+                               transition: all 0.2s; }
+      .rpt-view-btn:hover    { color: var(--text); background: rgba(0,0,0,0.04); }
+      .rpt-view-btn.active   { background: var(--primary); color: #fff;
+                               box-shadow: 0 2px 8px rgba(18,124,114,0.3); }
+      .rpt-view-btn.active:hover { background: var(--primary-dark); }
+
+      .rpt-view-pane         { display: none; }
+      .rpt-view-pane.active  { display: block; }
+
+      .rpt-summary-grid      { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      @media (max-width: 1100px) { .rpt-summary-grid { grid-template-columns: 1fr; }
+                                    .rpt-metric-grid, .rpt-status-grid { grid-template-columns: repeat(2, 1fr); }
+                                    .rpt-filters-grid { grid-template-columns: 1fr; } }
+
+      /* Donut + Line chart styling */
+      .rpt-donut             { display:flex; align-items:center; justify-content:center;
+                               padding: 14px 0; min-height: 240px; }
+      .rpt-donut-empty       { color: var(--muted); font-style: italic; }
+      .rpt-donut svg         { max-width: 100%; }
+      .rpt-donut-legend      { display:flex; flex-direction:column; gap:8px; margin-left: 20px;
+                               font-size: 0.88em; }
+      .rpt-donut-legend i    { display:inline-block; width: 12px; height: 12px; border-radius: 3px;
+                               margin-right: 8px; vertical-align: middle; }
+
+      .rpt-trend             { padding: 8px 0; min-height: 240px; position: relative; }
+      .rpt-trend svg         { width: 100%; height: 240px; display:block; }
+      .rpt-trend-tip         { position: absolute; background: rgba(15,23,42,0.92); color: #fff;
+                               padding: 8px 12px; border-radius: 6px; font-size: 0.8em;
+                               pointer-events: none; display: none; min-width: 130px;
+                               box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 10; }
+      .rpt-trend-tip strong  { display:block; margin-bottom: 4px; font-size: 1.1em; }
+      .rpt-trend-tip span    { display:block; }
+
+      /* Once-only entrance animation for chart contents — applied as a class
+         that the JS sets only when the underlying data changes (so a 2s
+         silent refresh doesn't re-trigger). Plays once per re-render. */
+      .rpt-anim-once         { animation: rpt-content-in .65s cubic-bezier(.2,.7,.3,1) backwards; }
+      @keyframes rpt-content-in {
+        from { opacity: 0; transform: scale(.92); }
+        to   { opacity: 1; transform: scale(1);   }
+      }
+      /* Line chart paths draw in left-to-right. Paths get pathLength="100" so
+         dasharray/dashoffset are normalized regardless of actual length. */
+      .rpt-line-draw         { stroke-dasharray: 100; stroke-dashoffset: 100;
+                               animation: rpt-stroke-draw 1.4s cubic-bezier(.4,.0,.2,1) forwards; }
+      /* Donut wedges draw in around the circle, one after another */
+      .rpt-arc-draw          { stroke-dasharray: 100; stroke-dashoffset: 100;
+                               animation: rpt-stroke-draw 1.0s cubic-bezier(.4,.0,.2,1) forwards; }
+      @keyframes rpt-stroke-draw { to { stroke-dashoffset: 0; } }
+
+      /* Farmley-style horizontal bar list (Top Vehicles by Visits) */
+      .frm-bar-chart         { padding: 6px 4px; }
+      .frm-bar-row           { display:flex; align-items:center; gap: 12px;
+                               padding: 6px 0; opacity: 0;
+                               animation: frm-slide-in .55s cubic-bezier(.2,.7,.3,1) forwards; }
+      .frm-bar-label         { flex: 0 0 200px; text-align: right; font-size: 0.86em;
+                               color: var(--text); font-weight: 600;
+                               white-space: nowrap; overflow: hidden;
+                               text-overflow: ellipsis; }
+      .frm-bar-track         { flex: 1; height: 22px; background: rgba(31,42,39,0.05);
+                               border-radius: 4px; overflow: hidden; position: relative; }
+      .frm-bar-fill          { height: 100%; background: linear-gradient(90deg, #2f8b57 0%, #127c72 100%);
+                               border-radius: 4px;
+                               display: flex; align-items: center; justify-content: flex-end;
+                               padding-right: 10px;
+                               width: 0;
+                               animation: frm-grow .8s cubic-bezier(.2,.7,.3,1) forwards .15s; }
+      .frm-bar-fill[style*="width: 0"] { animation: none; }
+      .frm-bar-val           { color: #fff; font-size: 0.78em; font-weight: 700;
+                               white-space: nowrap; }
+      .frm-bar-axis          { display:flex; justify-content: space-between;
+                               margin-left: 212px; margin-top: 8px;
+                               font-size: 0.75em; color: var(--muted); }
+      @keyframes frm-slide-in { from { opacity: 0; transform: translateX(-12px); }
+                                to   { opacity: 1; transform: translateX(0); } }
+      @keyframes frm-grow     { from { width: 0; } }
+
+      /* Summary view chart entrance animations — staggered per panel.
+         The animation fires when the view is first activated AND every time
+         the user clicks the Summary View tab again (JS toggles
+         .rpt-anim-restart off then on to re-trigger). */
+      #rpt-summary-view.active .rpt-summary-grid > .panel,
+      .rpt-summary-grid.rpt-anim-restart > .panel {
+        animation: rpt-panel-in .55s cubic-bezier(.2,.7,.3,1) backwards;
+      }
+      .rpt-summary-grid > .panel:nth-child(1) { animation-delay: 0ms; }
+      .rpt-summary-grid > .panel:nth-child(2) { animation-delay: 120ms; }
+      .rpt-summary-grid > .panel:nth-child(3) { animation-delay: 240ms; }
+      .rpt-summary-grid > .panel:nth-child(4) { animation-delay: 360ms; }
+      @keyframes rpt-panel-in {
+        from { opacity: 0; transform: translateY(16px) scale(0.98); }
+        to   { opacity: 1; transform: translateY(0)    scale(1);    }
+      }
+
+      /* Pagination controls under the detail tables */
+      .rpt-paginator         { display:flex; align-items:center; gap: 8px;
+                               padding: 10px 4px; justify-content: center;
+                               flex-wrap: wrap; font-size: 0.88em; }
+      .rpt-paginator button  { padding: 4px 12px; min-height: 32px; font-size: 0.95em; }
+      .rpt-paginator button:disabled { opacity: 0.35; cursor: not-allowed; background: transparent; color: var(--muted); border: 1px solid var(--line); }
+      .rpt-page-info         { padding: 0 12px; color: var(--text); }
+      .rpt-page-info b       { color: var(--primary); }
+      .rpt-page-meta         { color: var(--muted); font-size: 0.92em; margin-left: 6px; }
+    </style>
+  </head>
+  <body>
+    <!-- Mobile-only hamburger + backdrop. CSS hides these on desktop. -->
+    <button id="mobile-menu-toggle" type="button" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <div id="mobile-backdrop" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="brand-logo" src="{{ url_for('static', filename='assets/vay-logo.jpeg') }}" alt="VAY logo">
+          <div>
+            <strong>VayAccess Systems</strong>
+            <span>Parking Control</span>
+          </div>
+        </div>
+        <nav aria-label="Primary">
+          <button class="nav-item active" data-view="dashboard">Dashboard</button>
+          <button class="nav-item" data-view="exit">Exit</button>
+          <button class="nav-item" data-view="devices">Devices</button>
+          <button class="nav-item" data-view="reports">Reports</button>
+          <button class="nav-item" data-view="admin">Admin</button>
+          <!-- Entry + Tariffs views still exist (entry-form is used by Dashboard
+               GRANTED auto-fill flow) but are no longer reachable from the nav. -->
+        </nav>
+        <div class="operator-panel">
+          <span>Signed in as</span>
+          <strong>Supervisor</strong>
+          <small>Gate A · Shift 2</small>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">VayAccess Systems Control</p>
+            <h1 id="view-title">Dashboard</h1>
+          </div>
+          <div class="top-actions">
+            <span id="clock"></span>
+            <button class="ghost-button" id="seed-data">Reload Demo</button>
+          </div>
+        </header>
+
+        <!-- ─── DASHBOARD ───────────────────────────────────────────────── -->
+        <section id="dashboard" class="view active">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>Occupancy</span>
+              <strong id="metric-occupancy">0 / 0</strong>
+              <div class="meter"><i id="occupancy-bar"></i></div>
+            </article>
+            <article class="metric">
+              <span>Available Slots</span>
+              <strong id="metric-available">0</strong>
+              <small>Across all zones</small>
+            </article>
+            <article class="metric">
+              <span>Today Revenue</span>
+              <strong id="metric-revenue">₹0</strong>
+              <small>Paid exits only</small>
+            </article>
+            <article class="metric">
+              <span>Active Devices</span>
+              <strong id="metric-devices">0</strong>
+              <small>Readers, cameras, barriers</small>
+            </article>
+          </div>
+
+          <!-- Long-parked alert: vehicles inside longer than max_dwell_hours -->
+          <div id="dash-longparked-alert" style="display:none; padding: 14px 18px; margin-bottom: 14px;
+               background: rgba(214,142,38,0.12); border: 2px solid #d68e26; border-radius: 10px;
+               color: #7a4d05; font-weight: 600; font-size: 0.96em; align-items:flex-start; gap: 12px;">
+            <span style="font-size: 1.5em; line-height: 1;">⏱</span>
+            <div style="flex:1;">
+              <div style="font-weight:700;">
+                <span id="dash-longparked-count">0</span> vehicle(s) parked longer than
+                <span id="dash-longparked-threshold">12</span>h
+              </div>
+              <div id="dash-longparked-list" style="font-weight: 500; font-size: 0.85em; margin-top: 6px;
+                   font-family: monospace; line-height: 1.5;"></div>
+            </div>
+            <button type="button" id="dash-longparked-dismiss" class="ghost-button"
+                    style="padding: 6px 12px; font-size: 0.85em;">Dismiss</button>
+          </div>
+
+          <!-- Auto-exit alert: vehicle just left via ANPR/UHF re-scan -->
+          <div id="dash-autoexit-alert" style="display:none; padding: 14px 18px; margin-bottom: 14px;
+               background: rgba(47,139,87,0.12); border: 2px solid #2f8b57; border-radius: 10px;
+               color: #1f5d3a; font-weight: 700; font-size: 1em; align-items:center; gap: 12px;">
+            <span style="font-size: 1.5em;">↩</span>
+            <div style="flex:1;">
+              <div><b id="dash-autoexit-name">—</b>
+                (<span id="dash-autoexit-id" style="font-family:monospace; font-weight:600;">—</span>)
+                <b>auto-exited</b>.
+              </div>
+              <div style="font-weight: 500; font-size: 0.88em; margin-top: 4px;">
+                Detected on re-scan after parking session closed automatically.
+              </div>
+            </div>
+            <button type="button" id="dash-autoexit-dismiss" class="ghost-button"
+                    style="padding: 6px 12px; font-size: 0.85em;">Dismiss</button>
+          </div>
+
+          <!-- Expired-tag alert: pops up on EXPIRED scans -->
+          <div id="dash-expired-alert" style="display:none; padding: 14px 18px; margin-bottom: 14px;
+               background: rgba(183,74,66,0.12); border: 2px solid #b74a42; border-radius: 10px;
+               color: #8a2820; font-weight: 700; font-size: 1em;
+               display:none; align-items:center; gap: 12px;">
+            <span style="font-size: 1.5em;">⚠</span>
+            <div style="flex:1;">
+              <div>Validity expired for <b id="dash-expired-name">—</b>
+                (tag <span id="dash-expired-tag" style="font-family:monospace; font-weight:600;">—</span>)
+              </div>
+              <div style="font-weight: 500; font-size: 0.88em; margin-top: 4px; color: #6b1c14;">
+                Your period has expired — please renew the tag in the
+                <a href="#" data-jump="admin" style="color: var(--primary); font-weight: 700;">Admin tab → Renewal</a> section.
+              </div>
+            </div>
+            <button type="button" id="dash-expired-dismiss" class="ghost-button"
+                    style="padding: 6px 12px; font-size: 0.85em;">Dismiss</button>
+          </div>
+
+          <h3 class="pv-section-title">Live ANPR Gate</h3>
+          <div class="dashboard-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Camera Feed</h2>
+                <span id="anpr-status">Connecting…</span>
+              </div>
+              <div class="live-feed-wrap">
+                <img id="anpr-stream" alt="Live camera feed" src="{{ url_for('get_latest_frame') }}">
+                <div class="live-hud-status">
+                  <span id="anpr-dot" class="live-hud-dot"></span>
+                  <span id="anpr-dot-label">ACTIVE</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head"><h2>Current Scan</h2></div>
+              <dl class="scan-row">
+                <div><dt>Number Plate</dt><dd id="scan-plate" class="mono">Waiting…</dd></div>
+                <div><dt>UHF RFID Tag</dt><dd id="scan-tag"   class="mono">Waiting…</dd></div>
+                <div><dt>Employee</dt>    <dd id="scan-owner">N/A</dd></div>
+                <div><dt>Department</dt>  <dd id="scan-dept">—</dd></div>
+                <div><dt>Contact</dt>     <dd id="scan-contact">—</dd></div>
+                <div><dt>Vehicle Type</dt><dd id="scan-vtype">N/A</dd></div>
+                <div><dt>Confidence</dt>  <dd id="scan-conf">0%</dd></div>
+                <div><dt>Status</dt><dd><span id="scan-status" class="scan-status-badge scanning">SCANNING</span></dd></div>
+              </dl>
+            </section>
+          </div>
+
+          <h3 class="pv-section-title">ANPR Access History &amp; Registered Vehicles</h3>
+          <div class="dashboard-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Access History</h2>
+                <span id="log-count"></span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Time</th><th>Plate</th><th>Tag</th><th>Employee</th><th>Dept</th><th>Status</th></tr></thead>
+                  <tbody id="access-log-body">
+                    <tr><td colspan="6" style="text-align:center; opacity:0.6; padding:20px;">No access events yet</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Registered Vehicles</h2>
+                <button class="ghost-button" data-jump="admin">+ Activate New Tag →</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Plate</th><th>Owner</th><th>Tag</th><th>Valid Until</th></tr></thead>
+                  <tbody id="vehicles-body">
+                    <tr><td colspan="4" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ─── ENTRY ───────────────────────────────────────────────────── -->
+        <section id="entry" class="view">
+          <div class="form-layout">
+            <form id="entry-form" class="panel form-panel">
+              <h2>Register Entry</h2>
+              <div id="entry-prefill-banner" style="display:none; padding:10px 12px; margin-bottom:14px;
+                   background: rgba(47,139,87,0.10); border:1px solid rgba(47,139,87,0.35);
+                   border-radius: 8px; color:#2f8b57; font-size: 0.88em;">
+                <b>✓ Pre-filled</b> from gate scan for <b id="entry-prefill-name">—</b>.
+                Edit any field before submitting.
+              </div>
+              <label>Vehicle Number<input name="vehicle" required placeholder="MH12AB1234"></label>
+              <label>Vehicle Type
+                <select name="type">
+                  <option>Car</option><option>Bike</option>
+                </select>
+              </label>
+              <label>Employee Name<input name="emp_name" placeholder="Auto-fills from whitelist on ACCESS GRANTED"></label>
+              <label>Identification Mode
+                <select name="mode">
+                  <option>RFID/UHF</option><option>QR Code</option><option>ANPR</option><option>Manual Ticket</option>
+                </select>
+              </label>
+              <label>Tag / QR / Ticket ID<input name="identity" required placeholder="TAG-1009"></label>
+              <label>Zone
+                <select name="zone">
+                  <option>GMR Cargo Staff Parking</option>
+                </select>
+              </label>
+              <label class="check-row"><input type="checkbox" name="vip"> Whitelist or VIP vehicle</label>
+              <label class="check-row"><input type="checkbox" name="staff"> Staff free parking</label>
+              <button type="submit">Open Barrier &amp; Log Entry</button>
+            </form>
+
+            <section class="panel">
+              <h2>Entry Controls</h2>
+              <div class="control-grid">
+                <button class="action-button" data-sim="rfid">RFID Scan</button>
+                <button class="action-button" data-sim="qr">QR Scan</button>
+                <button class="action-button" data-sim="anpr">ANPR Read</button>
+                <button class="action-button" data-sim="ticket">Print Ticket</button>
+              </div>
+              <div class="gate-state">
+                <span>Gate A</span>
+                <strong id="gate-state">Ready</strong>
+              </div>
+              <p class="hint">Simulated controls update the forms and audit trail so the workflow can be tested without connected hardware.</p>
+            </section>
+          </div>
+        </section>
+
+        <!-- ─── EXIT ────────────────────────────────────────────────────── -->
+        <section id="exit" class="view">
+          <div class="form-layout">
+            <form id="exit-form" class="panel form-panel">
+              <h2>Process Exit</h2>
+              <label>Tag ID or Vehicle Plate *
+                <input name="query" required
+                       placeholder="e.g. MH12AB1234  or  E2806894000050319F12CCC8"
+                       style="text-transform: uppercase;"
+                       autocomplete="off">
+              </label>
+              <label>Zone (must match entry zone) *
+                <select name="zone" required>
+                  <option value="">-- Select zone --</option>
+                  <option>GMR Cargo Staff Parking</option>
+                </select>
+              </label>
+              <div id="exit-match-box" style="display:none; padding:12px 14px; margin: -6px 0 14px;
+                   background: rgba(47,139,87,0.10); border: 1px solid rgba(47,139,87,0.35);
+                   border-radius: 8px; font-size: 0.88em;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div>
+                    <b id="exit-match-vehicle">—</b>
+                    <span style="opacity:0.7;"> · <span id="exit-match-type">Car</span></span>
+                  </div>
+                  <span id="exit-match-duration" style="font-size:0.85em; opacity:0.75;">—</span>
+                </div>
+                <div style="margin-top:4px; font-size:0.85em; opacity:0.8;">
+                  Owner: <b id="exit-match-owner">—</b> ·
+                  Tag/ID: <span id="exit-match-id" style="font-family:monospace;">—</span> ·
+                  Entry zone: <span id="exit-match-zone">—</span>
+                </div>
+              </div>
+              <div id="exit-nomatch-box" style="display:none; padding:10px 12px; margin: -6px 0 14px;
+                   background: rgba(183,74,66,0.08); border: 1px solid rgba(183,74,66,0.35);
+                   border-radius: 8px; font-size: 0.85em; color: #8a2820;">
+                ⛔ No active vehicle matches that plate / tag. Exit blocked.
+              </div>
+              <button type="submit" id="exit-submit-btn" disabled>Confirm Exit</button>
+              <p class="hint" style="margin-top: 10px;">
+                Exit only succeeds for a vehicle that's currently parked.
+                Wrong plate or tag → exit refused.
+              </p>
+            </form>
+
+            <section class="panel receipt" id="receipt">
+              <h2>Exit Confirmation</h2>
+              <dl>
+                <dt>Vehicle</dt><dd id="receipt-vehicle">Select a vehicle</dd>
+                <dt>Owner</dt>  <dd id="receipt-owner">—</dd>
+                <dt>Entry Zone</dt><dd id="receipt-zone">—</dd>
+                <dt>Duration</dt><dd id="receipt-duration">—</dd>
+                <dt>Exit Time</dt><dd id="receipt-exittime">—</dd>
+              </dl>
+              <p class="hint">No payment required — this is an internal parking system.</p>
+            </section>
+          </div>
+        </section>
+
+        <!-- ─── TARIFFS ─────────────────────────────────────────────────── -->
+        <section id="tariffs" class="view">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Tariff Engine</h2>
+              <button id="add-tariff" class="ghost-button">Add Rule</button>
+            </div>
+            <div id="tariff-list" class="tariff-list"></div>
+          </div>
+        </section>
+
+        <!-- ─── DEVICES ─────────────────────────────────────────────────── -->
+        <section id="devices" class="view">
+          <!-- Default entry zone — used by all auto-entries from ANPR/UHF -->
+          <section class="panel">
+            <div class="panel-head"><h2>Default Entry Zone</h2></div>
+            <p class="hint" style="margin-bottom: 12px;">
+              The zone tagged on every auto-entry from the ANPR camera and the gate UHF reader.
+              Exit then requires the operator to pick the matching zone.
+            </p>
+            <div style="display:flex; gap:12px; align-items:flex-end;">
+              <label style="flex:1;">Zone
+                <select id="default-zone-select">
+                  <option>GMR Cargo Staff Parking</option>
+                </select>
+              </label>
+              <button type="button" id="default-zone-save" style="white-space:nowrap;">Save Default Zone</button>
+            </div>
+            <p class="hint" id="default-zone-current" style="margin-top: 8px;">
+              Currently: <b>—</b>
+            </p>
+          </section>
+
+          <!-- Connected Readers + per-device entry/exit stats -->
+          <section class="panel" style="margin-top: 20px;">
+            <div class="panel-head">
+              <h2>Connected Readers &amp; Camera</h2>
+              <button id="poll-devices" class="ghost-button">Refresh</button>
+            </div>
+
+              <style>
+                .dev-activity-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+                                      gap: 8px; margin-top: 10px; padding-top: 10px;
+                                      border-top: 1px dashed var(--line); }
+                .dev-activity      { background: rgba(31,42,39,0.04); padding: 8px 10px;
+                                      border-radius: 8px; text-align: center; }
+                .dev-activity .v   { display:block; font-size: 1.5em; font-weight: 800;
+                                      color: var(--primary); line-height: 1.1; }
+                .dev-activity .lbl { display:block; font-size: 0.68em; color: var(--muted);
+                                      text-transform: uppercase; letter-spacing: 1px;
+                                      font-weight: 700; margin-top: 2px; }
+                .dev-week          { font-size: 0.78em; color: var(--muted);
+                                      margin-top: 6px; text-align: right; }
+              </style>
+
+              <!-- SRK-F206: enrollment only, no entries/exits -->
+              <div class="device-card">
+                <div class="device-card-head">
+                  <h3>SRK-F206 Desktop UHF Reader · Enrollment Station</h3>
+                  <span id="dev-srk-state" class="device-state-ok">—</span>
+                </div>
+                <div class="device-card-meta">
+                  Port <span id="dev-srk-port">—</span> ·
+                  <span id="dev-srk-baud">—</span> baud ·
+                  protocol <span id="dev-srk-proto">—</span>
+                </div>
+                <div class="device-card-meta" style="margin-top: 6px;">
+                  Last tag: <span id="dev-srk-tag" style="font-family:monospace;">none</span>
+                </div>
+                <div class="device-card-meta" style="margin-top:6px; opacity:0.7;">
+                  Used in Admin tab to activate new employee tags — does not process gate traffic.
+                </div>
+              </div>
+
+              <!-- Gate A · Network UHF Reader — RFID/UHF entries -->
+              <div class="device-card">
+                <div class="device-card-head">
+                  <h3>Gate A · Network UHF Reader</h3>
+                  <span id="dev-gate-state" class="device-state-ok">—</span>
+                </div>
+                <div class="device-card-meta">TCP 192.168.0.200:200 · RFID/UHF identification</div>
+                <div class="device-card-meta" style="margin-top: 6px;">
+                  Last tag: <span id="dev-gate-tag" style="font-family:monospace;">none</span>
+                </div>
+                <div class="dev-activity-grid">
+                  <div class="dev-activity"><span class="v" id="dev-gate-entries">0</span><span class="lbl">Entries Today</span></div>
+                  <div class="dev-activity"><span class="v" id="dev-gate-exits">0</span><span class="lbl">Exits Today</span></div>
+                  <div class="dev-activity"><span class="v" id="dev-gate-active">0</span><span class="lbl">Currently Inside</span></div>
+                </div>
+                <div class="dev-week">7-day entries: <b id="dev-gate-week">0</b> · last activity: <span id="dev-gate-last">—</span></div>
+              </div>
+
+              <!-- Gate A · ANPR Camera — plate-based entries -->
+              <div class="device-card">
+                <div class="device-card-head">
+                  <h3>Gate A · ANPR Camera</h3>
+                  <span id="dev-cam-state" class="device-state-ok">—</span>
+                </div>
+                <div class="device-card-meta" id="dev-cam-src">—</div>
+                <div class="dev-activity-grid">
+                  <div class="dev-activity"><span class="v" id="dev-cam-entries">0</span><span class="lbl">Entries Today</span></div>
+                  <div class="dev-activity"><span class="v" id="dev-cam-exits">0</span><span class="lbl">Exits Today</span></div>
+                  <div class="dev-activity"><span class="v" id="dev-cam-active">0</span><span class="lbl">Currently Inside</span></div>
+                </div>
+                <div class="dev-week">7-day entries: <b id="dev-cam-week">0</b> · last activity: <span id="dev-cam-last">—</span></div>
+              </div>
+
+              <!-- Manual Ticket — operator-driven (used for visitor / non-RFID entries) -->
+              <div class="device-card">
+                <div class="device-card-head">
+                  <h3>Manual Ticket · Operator Terminal</h3>
+                  <span class="device-state-ok">Always Ready</span>
+                </div>
+                <div class="device-card-meta">Operator-issued entries for visitors without RFID or ANPR coverage</div>
+                <div class="dev-activity-grid">
+                  <div class="dev-activity"><span class="v" id="dev-man-entries">0</span><span class="lbl">Entries Today</span></div>
+                  <div class="dev-activity"><span class="v" id="dev-man-exits">0</span><span class="lbl">Exits Today</span></div>
+                  <div class="dev-activity"><span class="v" id="dev-man-active">0</span><span class="lbl">Currently Inside</span></div>
+                </div>
+                <div class="dev-week">7-day entries: <b id="dev-man-week">0</b> · last activity: <span id="dev-man-last">—</span></div>
+              </div>
+          </section>
+
+          <section class="panel" style="margin-top: 20px;">
+            <h2>Camera Source</h2>
+            <form id="camera-cfg-form">
+              <label>RTSP URL or webcam index
+                <input type="text" id="camera-source-input" required
+                       placeholder="rtsp://admin:@192.168.1.12:8557/stream2">
+              </label>
+              <button type="submit">Save &amp; Restart Stream</button>
+            </form>
+            <p class="hint">Changing the source reconnects the capture thread immediately.</p>
+          </section>
+        </section>
+
+        <!-- ─── REPORTS ─────────────────────────────────────────────────── -->
+        <section id="reports" class="view">
+          <!-- Title -->
+          <div class="rpt-header panel">
+            <div class="rpt-header-left">
+              <div class="rpt-icon">📊</div>
+              <div>
+                <h2>Parking Activity Report</h2>
+                <p class="rpt-subtitle">Monthly vehicle traffic, revenue, and zone-wise performance</p>
+              </div>
+            </div>
+            <div class="rpt-header-right">
+              <button id="rpt-refresh" class="ghost-button" type="button">↻ Refresh</button>
+              <button id="export-excel" class="ghost-button" type="button">⬇ Export Excel</button>
+              <button id="export-pdf"   class="ghost-button" type="button">⬇ Export PDF</button>
+            </div>
+          </div>
+
+          <!-- Filters -->
+          <div class="panel rpt-filters">
+            <div class="rpt-filters-head">
+              <h3>Filters</h3>
+              <button id="rpt-reset-filters" class="ghost-button" type="button">Reset Filters</button>
+            </div>
+            <div class="rpt-filters-grid">
+              <label>Month
+                <input id="rpt-month" type="month">
+              </label>
+              <label>Vehicle Type
+                <select id="rpt-type-filter">
+                  <option value="">All vehicle types</option>
+                  <option value="Car">Car</option>
+                  <option value="Bike">Bike</option>
+                </select>
+              </label>
+              <label>Zone
+                <select id="rpt-zone-filter">
+                  <option value="">All zones</option>
+                  <option value="GMR Cargo Staff Parking">GMR Cargo Staff Parking</option>
+                </select>
+              </label>
+              <!-- Legacy date-range input for code already wired to it -->
+              <input id="report-date" type="date" style="display:none;">
+            </div>
+          </div>
+
+          <!-- Top 4 metric cards -->
+          <div class="rpt-metric-grid">
+            <article class="rpt-metric">
+              <div class="rpt-metric-head"><span>Total Vehicles</span><span class="rpt-metric-icon">🚗</span></div>
+              <strong id="rpt-total-vehicles">0</strong>
+              <small id="rpt-total-vehicles-sub">in selected period</small>
+            </article>
+            <article class="rpt-metric">
+              <div class="rpt-metric-head"><span>Currently Parked</span><span class="rpt-metric-icon">🅿️</span></div>
+              <strong id="rpt-currently-parked" class="rpt-ok">0</strong>
+              <small id="rpt-currently-parked-sub">live count</small>
+            </article>
+            <article class="rpt-metric">
+              <div class="rpt-metric-head"><span>Exited</span><span class="rpt-metric-icon">↩</span></div>
+              <strong id="rpt-exited">0</strong>
+              <small id="rpt-exited-sub">closed transactions</small>
+            </article>
+            <article class="rpt-metric">
+              <div class="rpt-metric-head"><span>Avg Stay Duration</span><span class="rpt-metric-icon">⏱</span></div>
+              <strong id="rpt-avg-duration" class="rpt-ok">—</strong>
+              <small id="rpt-avg-duration-sub">across all visits</small>
+            </article>
+          </div>
+
+          <!-- Vehicle-type breakdown (3 cards: Car / Bike / VIP+Staff) -->
+          <div class="rpt-status-grid" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+            <article class="rpt-status rpt-status-present">
+              <span class="rpt-status-label">CAR</span>
+              <strong id="rpt-car-count">0</strong><span class="rpt-status-sub">unique vehicles</span>
+              <small id="rpt-car-rows">0 total visits</small>
+            </article>
+            <article class="rpt-status rpt-status-absent">
+              <span class="rpt-status-label">BIKE</span>
+              <strong id="rpt-bike-count">0</strong><span class="rpt-status-sub">unique vehicles</span>
+              <small id="rpt-bike-rows">0 total visits</small>
+            </article>
+            <article class="rpt-status rpt-status-weekoff">
+              <span class="rpt-status-label">VIP / STAFF</span>
+              <strong id="rpt-vip-count">0</strong><span class="rpt-status-sub">free visits</span>
+              <small id="rpt-vip-rows">0 total rows</small>
+            </article>
+          </div>
+
+          <!-- UHF Hourly Entry/Exit panel ─────────────────────────────── -->
+          <section class="panel" style="margin-top: 16px; border-left: 4px solid #2f8b57;">
+            <div class="panel-head" style="flex-wrap:wrap; gap: 10px;">
+              <div>
+                <h2>UHF Tag · Hourly Entries &amp; Exits</h2>
+                <p class="hint" style="margin: 2px 0 0;">Per-hour breakdown of <b>RFID/UHF</b> gate transactions for the selected date.</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px;">
+                <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:0.85em;">Date
+                  <input type="date" id="uhf-hourly-date" style="margin:0;">
+                </label>
+                <span id="uhf-hourly-meta" class="hint" style="white-space:nowrap;">0 entries · 0 exits</span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 90px;">Hour</th>
+                    <th>Entries</th>
+                    <th>Exits</th>
+                  </tr>
+                </thead>
+                <tbody id="uhf-hourly-body">
+                  <tr><td colspan="3" style="text-align:center; opacity:0.6; padding:18px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint" style="margin: 8px 0 0;">Each cell lists the time, plate, and employee for that hour.
+              Empty hours are hidden to keep the table compact.</p>
+          </section>
+
+          <!-- View toggle -->
+          <div class="rpt-view-toggle">
+            <button class="rpt-view-btn active" data-rpt-view="summary">Summary View</button>
+            <button class="rpt-view-btn" data-rpt-view="detailed">Detailed View</button>
+          </div>
+
+          <!-- SUMMARY VIEW -->
+          <div id="rpt-summary-view" class="rpt-view-pane active">
+            <div class="rpt-summary-grid">
+              <section class="panel">
+                <div class="panel-head"><h2>Vehicle Type Distribution</h2></div>
+                <div id="rpt-donut" class="rpt-donut"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head"><h2>Daily Vehicle Trend</h2></div>
+                <div id="rpt-trend" class="rpt-trend"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head"><h2>Top Vehicles by Visits</h2></div>
+                <div id="rpt-top-vehicles" class="bar-chart"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head"><h2>Zone-wise Performance</h2></div>
+                <div id="rpt-zone-perf" class="bar-chart"></div>
+              </section>
+            </div>
+
+          </div>
+
+          <!-- DETAILED VIEW (contains both the transactions table AND the gate access events) -->
+          <div id="rpt-detailed-view" class="rpt-view-pane">
+
+          <!-- Gate Access Events lives inside Detailed View only -->
+          <div id="rpt-access-events" class="panel" style="margin-bottom: 20px;">
+            <div class="panel-head">
+              <h2>Gate Access Events</h2>
+              <span id="rpt-access-meta" class="hint">0 scans · 0 granted · 0 denied</span>
+            </div>
+            <p class="hint" style="margin: 0 0 10px;">Every ANPR / RFID scan at the gate. Activated employees (Admin tab) get <b>ACCESS GRANTED</b>; non-whitelisted vehicles get <b>ACCESS DENIED</b>.</p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Scan Time</th>
+                    <th>Plate</th>
+                    <th>Tag (EPC)</th>
+                    <th>Employee</th>
+                    <th>Department</th>
+                    <th>Contact</th>
+                    <th>Type</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="rpt-access-body">
+                  <tr><td colspan="11" style="text-align:center; opacity:0.6; padding:20px;">No access events match the filters.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="rpt-paginator" data-paginator="access">
+              <button class="ghost-button" data-pg="first" title="First page">⏮</button>
+              <button class="ghost-button" data-pg="prev"  title="Previous page">◀</button>
+              <span class="rpt-page-info">Page <b data-pg="cur">1</b> of <b data-pg="total">1</b>
+                <span class="rpt-page-meta">· <span data-pg="range">0</span> of <span data-pg="all">0</span> rows</span>
+              </span>
+              <button class="ghost-button" data-pg="next" title="Next page">▶</button>
+              <button class="ghost-button" data-pg="last" title="Last page">⏭</button>
+            </div>
+          </div>
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 id="rpt-detail-title">Monthly Transactions</h2>
+                  <p class="hint" id="rpt-detail-meta">Showing 0 of 0 transactions</p>
+                  <p class="hint" style="margin-top: 4px;">Legend: <b>P</b>=Parked, <b>E</b>=Exited, <b>V</b>=VIP, <b>S</b>=Staff</p>
+                </div>
+                <span class="hint">Sorted by entry time, newest first</span>
+              </div>
+              <div class="table-wrap">
+                <table id="rpt-detail-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Vehicle</th>
+                      <th>Owner</th>
+                      <th>Type</th>
+                      <th>Zone</th>
+                      <th>Mode</th>
+                      <th>Identity</th>
+                      <th>Entry</th>
+                      <th>Exit</th>
+                      <th>Duration</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="rpt-detail-body">
+                    <tr><td colspan="11" style="text-align:center; opacity:0.6; padding:24px;">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="rpt-paginator" data-paginator="detail">
+                <button class="ghost-button" data-pg="first" title="First page">⏮</button>
+                <button class="ghost-button" data-pg="prev"  title="Previous page">◀</button>
+                <span class="rpt-page-info">Page <b data-pg="cur">1</b> of <b data-pg="total">1</b>
+                  <span class="rpt-page-meta">· <span data-pg="range">0</span> of <span data-pg="all">0</span> rows</span>
+                </span>
+                <button class="ghost-button" data-pg="next" title="Next page">▶</button>
+                <button class="ghost-button" data-pg="last" title="Last page">⏭</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- ─── ADMIN ───────────────────────────────────────────────────── -->
+        <section id="admin" class="view">
+          <h3 class="pv-section-title">Employee Tag Activation (SRK-F206)</h3>
+          <div class="dashboard-layout">
+            <section class="panel">
+              <div class="panel-head"><h2>1 · Scan UHF Tag</h2></div>
+              <div class="reader-status-pill">
+                <span id="adm-rdr-dot" class="dot"></span>
+                <div style="flex:1;">
+                  <div id="adm-rdr-status">Connecting…</div>
+                  <div style="font-size:0.78em; opacity:0.7;" id="adm-rdr-port">port: —</div>
+                </div>
+                <button type="button" class="ghost-button" id="adm-clear-tag"
+                        style="padding: 4px 10px; font-size: 0.8em;">Clear</button>
+              </div>
+              <div id="adm-tagbox" class="tag-scan-box">
+                <div class="epc-label">Detected EPC</div>
+                <div id="adm-epc" class="epc idle">— waiting for tag scan —</div>
+              </div>
+              <div id="adm-renew" class="renew-banner">
+                <b>↻ Renewal:</b> This tag is already assigned to
+                <b id="adm-renew-name">—</b>. The form has been pre-filled.
+              </div>
+              <p class="hint">
+                Place a tag on the SRK-F206. <b>One-shot mode</b>: the first
+                scan is locked until you press <b>Clear</b> — further reads from
+                the reader are ignored, so the form won't get overwritten while
+                you fill in the employee details.
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head"><h2>2 · Employee Details</h2></div>
+              <form id="emp-form" autocomplete="off">
+                <label>Employee Name *
+                  <input type="text" id="emp-name" required placeholder="Rajesh Kumar"></label>
+                <label>Department *
+                  <input type="text" id="emp-dept" required placeholder="Engineering"></label>
+                <label>Contact Number *
+                  <input type="tel" id="emp-contact" required placeholder="+91 98765 43210"
+                         pattern="[\+\d\s\-]{7,20}"></label>
+                <label>Vehicle Plate *
+                  <input type="text" id="emp-plate" required placeholder="TS08FH5796"
+                         pattern="[A-Za-z0-9\-\s]{4,15}" style="text-transform: uppercase;"></label>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px;">
+                  <label>Vehicle Type
+                    <select id="emp-vtype">
+                      <option value="Car" selected>Car</option>
+                      <option value="Bike">Bike</option>
+                    </select>
+                  </label>
+                  <label>Activation Period
+                    <select id="emp-months">
+                      <option value="1">1 month</option><option value="3">3 months</option>
+                      <option value="6">6 months</option><option value="12" selected>12 months</option>
+                      <option value="24">24 months</option><option value="36">36 months</option>
+                    </select>
+                  </label>
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top: 12px;">
+                  <label>Activation Date<input type="text" id="emp-actdate" readonly></label>
+                  <label>Valid Until<input type="text" id="emp-validuntil" readonly></label>
+                </div>
+                <label>RFID Tag (from SRK-F206)
+                  <input type="text" id="emp-tag" readonly placeholder="Scan a tag first…"></label>
+                <div style="display:flex; gap:10px; margin-top: 12px;">
+                  <button type="button" class="ghost-button" id="emp-reset">Reset</button>
+                  <button type="submit" id="emp-submit" disabled>Activate Tag</button>
+                </div>
+              </form>
+            </section>
+          </div>
+
+          <!-- ── Separate Renewal section ──────────────────────────────── -->
+          <h3 class="pv-section-title" style="color:#a87217;">Renew Expired / Expiring Tag</h3>
+          <p class="hint" style="margin: -8px 0 12px;">Renewal opens <b>1 day before</b> validity ends.
+            Earlier than that, the system blocks renewal so subscriptions can't be extended indefinitely.
+            For full re-enrollment of a returning employee, use the form above.</p>
+          <section class="panel" style="border-left: 4px solid #d5952a;">
+            <div class="panel-head"><h2>↻ Renewal</h2><span class="hint">Verify identity, then extend validity</span></div>
+
+            <label>Tag (EPC) to renew
+              <input type="text" id="renew-tag" placeholder="Type tag or click ↻ Renew in the table below"
+                     style="text-transform: uppercase; font-family: monospace;">
+            </label>
+            <button type="button" id="renew-lookup-btn" class="ghost-button"
+                    style="margin: -6px 0 14px; padding: 6px 14px;">Load Employee Details</button>
+
+            <!-- Read-only employee snapshot, populated after lookup -->
+            <div id="renew-details" style="display:none; padding: 14px;
+                 background: rgba(31,42,39,0.04); border:1px solid var(--line);
+                 border-radius: 10px; margin-bottom: 14px;">
+              <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; font-size: 0.9em;">
+                <div><b>Employee:</b> <span id="renew-d-name">—</span></div>
+                <div><b>Department:</b> <span id="renew-d-dept">—</span></div>
+                <div><b>Contact:</b> <span id="renew-d-contact">—</span></div>
+                <div><b>Plate:</b> <span id="renew-d-plate">—</span></div>
+                <div><b>Activated:</b> <span id="renew-d-actdate">—</span></div>
+                <div><b>Valid until:</b> <span id="renew-d-validuntil">—</span></div>
+              </div>
+              <div id="renew-eligibility" style="margin-top: 10px; padding: 8px 12px;
+                   border-radius: 6px; font-size: 0.85em; font-weight: 600;">
+              </div>
+            </div>
+
+            <label>Confirm Employee Name *
+              <input type="text" id="renew-confirm-name" placeholder="Type the exact employee name to verify">
+            </label>
+            <label>New Activation Period *
+              <select id="renew-months">
+                <option value="1">1 month</option>
+                <option value="3">3 months</option>
+                <option value="6">6 months</option>
+                <option value="12" selected>12 months</option>
+                <option value="24">24 months</option>
+                <option value="36">36 months</option>
+              </select>
+            </label>
+            <div style="display:flex; gap: 10px; margin-top: 4px;">
+              <button type="button" class="ghost-button" id="renew-cancel">Cancel</button>
+              <button type="button" id="renew-submit" disabled
+                      style="background:#d5952a; color:#fff;">↻ Confirm Renewal</button>
+            </div>
+          </section>
+
+          <section class="panel" style="margin-top: 20px;">
+            <div class="panel-head"><h2>Activated Employees</h2><span id="emp-count"></span></div>
+            <p class="hint" style="margin: 0 0 10px;">Only <b>Expired</b> and <b>Expiring</b> rows show an action button — the
+              backend blocks renewal more than 1 day before expiry. Click <b>↻ Renew</b> / <b>↻ Extend</b> to load that
+              employee into the Renewal section above (no duplicate row is created).</p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Employee</th><th>Department</th><th>Contact</th><th>Tag (EPC)</th>
+                    <th>Plate</th><th>Activated</th><th>Valid Until</th><th>Status</th><th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="emp-tbody">
+                  <tr><td colspan="9" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- ── Blacklist ─────────────────────────────────────────────── -->
+          <h3 class="pv-section-title" style="color:#8a2820;">Blacklist (Banned Plates / Tags)</h3>
+          <p class="hint" style="margin: -8px 0 12px;">Blacklisted plates/tags are always denied at the gate
+            — even if they also exist in the whitelist. Use for terminated employees, lost/stolen tags, banned visitors.</p>
+          <section class="panel" style="border-left: 4px solid #b74a42;">
+            <div class="panel-head"><h2>Add to Blacklist</h2></div>
+            <form id="bl-form" autocomplete="off"
+                  style="display:grid; grid-template-columns: 1fr 1fr 2fr auto; gap: 10px; align-items: end;">
+              <label>Number Plate
+                <input type="text" id="bl-plate" placeholder="TS08FH5796" style="text-transform: uppercase;">
+              </label>
+              <label>RFID Tag
+                <input type="text" id="bl-tag" placeholder="E2806894..." style="text-transform: uppercase; font-family: monospace;">
+              </label>
+              <label>Reason *
+                <input type="text" id="bl-reason" required placeholder="Terminated employee / lost tag / banned visitor">
+              </label>
+              <button type="submit" style="background:#b74a42; color:#fff;">Add</button>
+            </form>
+            <p class="hint" style="margin: 6px 0 0;">Provide at least one of: plate or tag.</p>
+          </section>
+          <section class="panel" style="margin-top: 14px;">
+            <div class="panel-head"><h2>Banned Entries</h2><span id="bl-count"></span></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Plate</th><th>Tag</th><th>Reason</th><th>Added By</th><th>Added At</th><th>Action</th></tr>
+                </thead>
+                <tbody id="bl-tbody">
+                  <tr><td colspan="6" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- ── Visitor Management ───────────────────────────────────── -->
+          <h3 class="pv-section-title" style="color:#1f5d3a;">Visitor Management (Time-Bound Passes)</h3>
+          <p class="hint" style="margin: -8px 0 12px;">For couriers, contractors, guest cars — access is allowed only
+            between start and end times. Use the whitelist for long-term employees instead.</p>
+          <section class="panel" style="border-left: 4px solid #2f8b57;">
+            <div class="panel-head"><h2>Issue Visitor Pass</h2></div>
+            <form id="vis-form" autocomplete="off">
+              <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                <label>Visitor Name *<input type="text" id="vis-name" required placeholder="Mr. Sharma"></label>
+                <label>Vehicle Plate *
+                  <input type="text" id="vis-plate" required placeholder="AP09XY1234" style="text-transform: uppercase;">
+                </label>
+                <label>RFID Tag (optional)
+                  <input type="text" id="vis-tag" placeholder="E2806894..." style="text-transform: uppercase; font-family: monospace;">
+                </label>
+                <label>Contact<input type="tel" id="vis-contact" placeholder="+91 98765 43210"></label>
+                <label>Purpose<input type="text" id="vis-purpose" placeholder="Cargo delivery"></label>
+                <label>Host Employee<input type="text" id="vis-host" placeholder="sai lochan"></label>
+                <label>Valid From *<input type="datetime-local" id="vis-start" required></label>
+                <label>Valid Until *<input type="datetime-local" id="vis-end" required></label>
+              </div>
+              <div style="display:flex; gap: 10px; margin-top: 12px;">
+                <button type="button" class="ghost-button" id="vis-reset">Reset</button>
+                <button type="submit" style="background:#2f8b57; color:#fff;">Issue Pass</button>
+              </div>
+            </form>
+          </section>
+          <section class="panel" style="margin-top: 14px;">
+            <div class="panel-head"><h2>Active &amp; Recent Visitor Passes</h2><span id="vis-count"></span></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Name</th><th>Plate</th><th>Tag</th><th>Purpose</th><th>Host</th>
+                      <th>From</th><th>Until</th><th>Status</th><th>Action</th></tr>
+                </thead>
+                <tbody id="vis-tbody">
+                  <tr><td colspan="9" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- ── Entry-Time Rules ─────────────────────────────────────── -->
+          <h3 class="pv-section-title" style="color:#5a4a25;">Entry-Time Restrictions</h3>
+          <p class="hint" style="margin: -8px 0 12px;">Block entries during specific time windows
+            (e.g. <code>00:00-05:00,22:00-23:59</code>). Blacklist + whitelist checks happen <i>before</i> this;
+            valid entries are still denied if the current time falls inside any blocked window.</p>
+          <section class="panel" style="border-left: 4px solid #a87217;">
+            <div class="panel-head"><h2>Blocked Entry Windows</h2></div>
+            <form id="ew-form" autocomplete="off">
+              <label>Comma-separated windows (24-hour format <code>HH:MM-HH:MM</code>)
+                <input type="text" id="ew-windows" placeholder="e.g. 22:00-23:59,00:00-05:00"
+                       style="font-family: monospace; letter-spacing: 0.5px;">
+              </label>
+              <p class="hint" style="margin: 4px 0 12px;">Leave empty to disable time-based blocking entirely.</p>
+              <div style="display:flex; gap: 10px;">
+                <button type="submit" style="background:#a87217; color:#fff;">Save Windows</button>
+              </div>
+            </form>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
+    <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
+    <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
+    <script src="{{ url_for('static', filename='parkvision.js') }}"></script>
+  </body>
+</html>

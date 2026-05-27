@@ -1,0 +1,9 @@
+opencv-python
+ultralytics
+easyocr
+requests
+numpy
+Flask
+Flask-SQLAlchemy
+python-dateutil
+pyserial

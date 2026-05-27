@@ -1,0 +1,39 @@
+# Local artifacts that should not be deployed.
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.DS_Store
+
+# Heavy ML weights — only needed for on-site deploys, never in cloud builds.
+# yolov8n.pt is ~6 MB; the FastALPR cache (~80 MB) lives under ~/.cache.
+# Uncomment the line below if you want to keep weights out of git entirely:
+# yolov8n.pt
+
+# Local data the cloud build doesn't need.
+instance/parking.db
+database/*.db
+detections/
+debug_snapshots/
+camera_config.json
+*.csv
+*.sql
+local_dump.sql
+
+# Tooling
+.idea/
+.vscode/
+
+# Large local-only artifacts that shouldn't go to the repo.
+debug_snapshots/
+*.docx
+srs_extract_*/
+srs_text.txt
+server.mjs
+
+# Test image dumps the camera loop writes
+*.png
+!templates/**/*.png
+!static/**/*.png

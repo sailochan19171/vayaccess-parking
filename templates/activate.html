@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VayAccess Systems · Employee Activation</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        .activate-wrap   { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+        .panel-title     { display:flex; align-items:center; justify-content:space-between;
+                           margin-bottom: 20px; }
+        .panel-title a   { color: #3b82f6; text-decoration: none; font-weight: 600; }
+        .panel-title a:hover { text-decoration: underline; }
+
+        .grid            { display: grid; grid-template-columns: 1fr 1.4fr; gap: 20px; }
+        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+        .card            { background: rgba(15,23,42,0.7); border:1px solid rgba(255,255,255,0.08);
+                           border-radius: 14px; padding: 22px; }
+        .card h2         { margin: 0 0 6px; font-size: 1.15em; }
+        .card .sub       { color:#94a3b8; font-size:0.85em; margin-bottom: 18px; }
+
+        /* Reader status pill + live EPC */
+        .reader-status   { display:flex; align-items:center; gap:10px; padding:10px 14px;
+                           background: rgba(2,6,23,0.6); border-radius:10px;
+                           border:1px solid rgba(255,255,255,0.06); margin-bottom: 16px; }
+        .dot             { width:10px; height:10px; border-radius:50%; background:#6b7280;
+                           box-shadow:0 0 0 0 rgba(0,0,0,0); transition: all .3s; }
+        .dot.ok          { background:#10b981; box-shadow:0 0 12px rgba(16,185,129,0.6); }
+        .dot.err         { background:#ef4444; }
+        .reader-text     { font-size: 0.9em; color:#cbd5e1; }
+        .reader-port     { color:#94a3b8; font-size: 0.8em; }
+
+        .tag-box         { background: linear-gradient(135deg, rgba(59,130,246,0.18), rgba(16,185,129,0.12));
+                           border: 1px dashed rgba(59,130,246,0.5);
+                           border-radius: 14px; padding: 28px; text-align:center; min-height: 120px;
+                           display:flex; flex-direction:column; justify-content:center;
+                           transition: border-color .3s, box-shadow .3s; }
+        .tag-box.live    { border-style:solid; border-color: #10b981;
+                           box-shadow: 0 0 24px rgba(16,185,129,0.25); }
+        .tag-box .label  { font-size:0.7em; letter-spacing:2px; text-transform: uppercase;
+                           color:#94a3b8; margin-bottom: 8px; }
+        .tag-box .epc    { font-family: 'Consolas','Monaco',monospace; font-size: 1.45em;
+                           font-weight: 700; color:#e2e8f0; word-break: break-all; }
+        .tag-box .epc.idle { color:#64748b; font-size: 1.0em; font-weight: 400; font-style:italic;
+                             font-family:'Outfit',sans-serif; }
+
+        .hint            { font-size: 0.78em; color:#64748b; margin-top: 12px; text-align:center; }
+
+        /* Form */
+        .form-grid       { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .form-grid .full { grid-column: 1 / -1; }
+        label            { display:block; font-size:0.78em; color:#94a3b8; margin-bottom:6px;
+                           text-transform: uppercase; letter-spacing:0.5px; }
+        input, select    { width:100%; padding: 11px 12px; border-radius:8px;
+                           background: rgba(2,6,23,0.6); color:#f1f5f9;
+                           border:1px solid rgba(255,255,255,0.08); font-size:0.95em;
+                           font-family: 'Outfit', sans-serif; box-sizing: border-box; }
+        input:focus, select:focus { outline:none; border-color:#3b82f6; }
+        input[readonly]  { color:#94a3b8; }
+
+        .btn-row         { display:flex; gap: 12px; margin-top: 18px; }
+        .btn             { padding: 12px 18px; border-radius:10px; border:none; cursor:pointer;
+                           font-weight: 700; font-size:0.95em; font-family:'Outfit',sans-serif;
+                           transition: all .2s; }
+        .btn-primary     { background: linear-gradient(135deg,#3b82f6,#10b981); color:#fff; flex:1; }
+        .btn-primary:hover { filter: brightness(1.1); }
+        .btn-primary:disabled { background:#475569; cursor:not-allowed; filter:none; }
+        .btn-ghost       { background: rgba(255,255,255,0.05); color:#cbd5e1;
+                           border:1px solid rgba(255,255,255,0.1); }
+
+        .toast           { position: fixed; bottom: 24px; right: 24px; padding: 14px 18px;
+                           border-radius: 10px; font-weight: 600; opacity: 0; transform: translateY(20px);
+                           transition: all .3s; pointer-events: none; z-index: 50; }
+        .toast.show      { opacity: 1; transform: translateY(0); }
+        .toast.ok        { background:#10b981; color:#fff; }
+        .toast.err       { background:#ef4444; color:#fff; }
+
+        /* Recent employees table */
+        .table-wrap      { margin-top: 24px; }
+        table            { width:100%; border-collapse: collapse; font-size: 0.88em; }
+        th               { text-align:left; padding: 10px 8px; color:#94a3b8;
+                           font-weight:600; text-transform: uppercase; font-size:0.75em;
+                           border-bottom:1px solid rgba(255,255,255,0.08); }
+        td               { padding: 10px 8px; border-bottom:1px solid rgba(255,255,255,0.04);
+                           color:#e2e8f0; }
+        tr:hover td      { background: rgba(59,130,246,0.05); }
+        .pill            { padding: 3px 9px; border-radius: 6px; font-size: 0.78em; font-weight:600;
+                           display: inline-block; }
+        .pill.active     { background: rgba(16,185,129,0.18); color:#10b981; }
+        .pill.expired    { background: rgba(239,68,68,0.18); color:#ef4444; }
+        .tag-mono        { font-family: 'Consolas',monospace; font-size: 0.85em; color:#cbd5e1; }
+    </style>
+</head>
+<body>
+    <header style="padding: 24px 32px; background: rgba(2,6,23,0.6); border-bottom:1px solid rgba(255,255,255,0.06);">
+        <div style="display:flex; align-items:center; justify-content:space-between; max-width: 1100px; margin: 0 auto;">
+            <div style="font-size:1.4em; font-weight: 800;">
+                VayAccess <span style="color:#3b82f6;">Systems</span>
+                <span style="color:#94a3b8; font-weight:400; font-size:0.7em; margin-left: 8px;">· Employee Activation</span>
+            </div>
+            <a href="/" style="color:#3b82f6; text-decoration:none; font-weight:600;">← Live Gate Dashboard</a>
+        </div>
+    </header>
+
+    <div class="activate-wrap">
+        <div class="grid">
+            <!-- LEFT: Tag scan -->
+            <div class="card">
+                <h2>1 · Scan UHF Tag</h2>
+                <div class="sub">Place the tag on the SRK-F206 desktop reader (880–960 MHz). The EPC appears here automatically.</div>
+
+                <div class="reader-status">
+                    <div id="readerDot" class="dot"></div>
+                    <div style="flex:1;">
+                        <div class="reader-text" id="readerStatus">Connecting…</div>
+                        <div class="reader-port" id="readerPort">port: —</div>
+                    </div>
+                    <button class="btn btn-ghost" id="btnClear" type="button" style="padding: 6px 12px; font-size: 0.8em;">Clear</button>
+                </div>
+
+                <div id="tagBox" class="tag-box">
+                    <div class="label">Detected EPC</div>
+                    <div id="epc" class="epc idle">— waiting for tag scan —</div>
+                </div>
+
+                <div id="renewBanner" style="display:none; margin-top: 14px; padding: 12px 14px;
+                     background: rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4);
+                     border-radius: 10px; color:#fbbf24; font-size: 0.88em;">
+                    <b>↻ Renewal:</b> This tag is already assigned to
+                    <b id="renewEmpName">—</b>. The form has been pre-filled —
+                    edit any field and click <b>Activate Tag</b> to renew/update.
+                </div>
+
+                <div class="hint">Tag stays buffered for 30 s. Press <b>Clear</b> to rescan a different tag.</div>
+            </div>
+
+            <!-- RIGHT: Employee form -->
+            <div class="card">
+                <h2>2 · Employee Details</h2>
+                <div class="sub">Map this tag to an employee. Activation starts now; validity runs through the period below.</div>
+
+                <form id="empForm" autocomplete="off">
+                    <div class="form-grid">
+                        <div>
+                            <label>Employee Name *</label>
+                            <input type="text" id="emp_name" required placeholder="e.g. Rajesh Kumar">
+                        </div>
+                        <div>
+                            <label>Department *</label>
+                            <input type="text" id="department" required placeholder="e.g. Engineering">
+                        </div>
+                        <div>
+                            <label>Contact Number *</label>
+                            <input type="tel" id="contact_number" required placeholder="e.g. +91 98765 43210"
+                                   pattern="[\+\d\s\-]{7,20}">
+                        </div>
+                        <div>
+                            <label>Activation Period *</label>
+                            <select id="activation_months" required>
+                                <option value="1">1 month</option>
+                                <option value="3">3 months</option>
+                                <option value="6">6 months</option>
+                                <option value="12" selected>12 months</option>
+                                <option value="24">24 months</option>
+                                <option value="36">36 months</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Activation Date</label>
+                            <input type="text" id="activation_date" readonly>
+                        </div>
+                        <div>
+                            <label>Valid Until</label>
+                            <input type="text" id="valid_until_display" readonly>
+                        </div>
+                        <div>
+                            <label>Vehicle Plate *</label>
+                            <input type="text" id="number_plate" required placeholder="e.g. TS08FH5796"
+                                   style="text-transform: uppercase;"
+                                   pattern="[A-Za-z0-9\-\s]{4,15}">
+                        </div>
+                        <div>
+                            <label>Vehicle Type</label>
+                            <select id="vehicle_type">
+                                <option value="Car" selected>Car</option>
+                                <option value="Bike">Bike / Scooty</option>
+                                <option value="Truck">Truck</option>
+                                <option value="Bus">Bus</option>
+                            </select>
+                        </div>
+                        <div class="full">
+                            <label>RFID Tag (from SRK-F206)</label>
+                            <input type="text" id="rfid_tag" readonly placeholder="Scan a tag first…">
+                        </div>
+                    </div>
+
+                    <div class="btn-row">
+                        <button type="button" class="btn btn-ghost" id="btnReset">Reset</button>
+                        <button type="submit" class="btn btn-primary" id="btnActivate" disabled>Activate Tag</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Recent activations -->
+        <div class="card table-wrap">
+            <h2>Recently Activated Employees</h2>
+            <div class="sub">Live feed of tag activations. The gate uses these records to grant or deny access.</div>
+            <div style="overflow-x:auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Employee</th>
+                            <th>Department</th>
+                            <th>Contact</th>
+                            <th>Tag (EPC)</th>
+                            <th>Plate</th>
+                            <th>Activated</th>
+                            <th>Valid Until</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="empTbody">
+                        <tr><td colspan="8" style="text-align:center; color:#64748b; padding:24px;">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function showToast(msg, kind = 'ok') {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = `toast show ${kind}`;
+    setTimeout(() => { t.className = `toast ${kind}`; }, 3200);
+}
+
+function setActivateBtnState() {
+    const hasTag = $('rfid_tag').value.trim().length > 0;
+    $('btnActivate').disabled = !hasTag;
+}
+
+function fmtDate(d) {
+    return d.toISOString().slice(0, 10);
+}
+
+function recalcValidity() {
+    const months = parseInt($('activation_months').value || '12', 10);
+    const now = new Date();
+    const valid = new Date(now);
+    valid.setMonth(valid.getMonth() + months);
+    $('activation_date').value = fmtDate(now);
+    $('valid_until_display').value = fmtDate(valid);
+}
+
+$('activation_months').addEventListener('change', recalcValidity);
+recalcValidity();
+setInterval(() => {
+    // Keep "today" fresh if the page sits open overnight.
+    if ($('activation_date').value !== fmtDate(new Date())) recalcValidity();
+}, 60_000);
+
+// Clear all the user-editable form fields, preserving the live RFID tag
+// (so a fresh scan immediately shows in the EPC box and rfid_tag field).
+function clearFormFields() {
+    $('emp_name').value         = '';
+    $('department').value       = '';
+    $('contact_number').value   = '';
+    $('number_plate').value     = '';
+    $('vehicle_type').value     = 'Car';
+    $('activation_months').value = '12';
+    recalcValidity();
+}
+
+// Look up an existing employee by tag.
+//   - found     → pre-fill the form for renewal, show the amber banner
+//   - not found → BLANK the form so the previous tag's details don't bleed
+//                  into the new enrollment
+// Called once per newly-detected tag (guarded by lastLookedUpTag).
+async function lookupAndPrefill(tag) {
+    try {
+        const r = await fetch(`/api/employees/by_tag/${encodeURIComponent(tag)}`,
+                              { cache: 'no-store' });
+        if (r.status === 404) {
+            clearFormFields();
+            $('renewBanner').style.display = 'none';
+            return;
+        }
+        const js = await r.json();
+        if (!js.found || !js.employee) {
+            clearFormFields();
+            $('renewBanner').style.display = 'none';
+            return;
+        }
+        const e = js.employee;
+        $('emp_name').value         = e.owner_name     || '';
+        $('department').value       = e.department     || '';
+        $('contact_number').value   = e.contact_number || '';
+        $('number_plate').value     = (e.number_plate || '').replace(/^EMP-/, '');
+        if (e.vehicle_type)      $('vehicle_type').value     = e.vehicle_type;
+        if (e.activation_months) $('activation_months').value = e.activation_months;
+        recalcValidity();
+        $('renewEmpName').textContent = e.owner_name || tag;
+        $('renewBanner').style.display = 'block';
+    } catch (err) {
+        // Lookup failure (network/server hiccup) → leave fields alone
+        $('renewBanner').style.display = 'none';
+    }
+}
+
+// Track which tag we've already pre-filled for, so we don't re-fetch every
+// 800 ms while the same tag stays buffered.
+let lastLookedUpTag = '';
+
+// Poll desktop reader status + latest tag
+async function pollReader() {
+    try {
+        const r  = await fetch('/api/desktop_reader/status', { cache: 'no-store' });
+        const js = await r.json();
+        const ok = (js.status || '').toLowerCase().startsWith('connected');
+        const err = !ok && /(error|failed|not installed|no com)/i.test(js.status || '');
+        const dot = $('readerDot');
+        dot.classList.toggle('ok',  ok);
+        dot.classList.toggle('err', err);
+        $('readerStatus').textContent = js.status || '—';
+        $('readerPort').textContent   = `port: ${js.port || 'auto'}  ·  ${js.baudrate || 115200} baud  ·  proto: ${js.active_protocol || '—'}`;
+
+        const tag = (js.latest_tag || '').toUpperCase();
+        const epcEl = $('epc');
+        const tagBox = $('tagBox');
+        if (tag) {
+            if ($('rfid_tag').value !== tag) {
+                $('rfid_tag').value = tag;
+                setActivateBtnState();
+            }
+            epcEl.textContent = tag;
+            epcEl.classList.remove('idle');
+            tagBox.classList.add('live');
+            // First time we see this tag in this session → look it up to
+            // see if it's already activated, and pre-fill the form if so.
+            if (tag !== lastLookedUpTag) {
+                lastLookedUpTag = tag;
+                lookupAndPrefill(tag);
+            }
+        } else if (!$('rfid_tag').value) {
+            epcEl.textContent = '— waiting for tag scan —';
+            epcEl.classList.add('idle');
+            tagBox.classList.remove('live');
+            $('renewBanner').style.display = 'none';
+        }
+    } catch (e) {
+        $('readerStatus').textContent = 'API unreachable';
+        $('readerDot').classList.add('err');
+    }
+}
+setInterval(pollReader, 800);
+pollReader();
+
+// Clear buffered tag
+$('btnClear').addEventListener('click', async () => {
+    await fetch('/api/desktop_reader/clear', { method: 'POST' });
+    $('rfid_tag').value = '';
+    $('epc').textContent = '— waiting for tag scan —';
+    $('epc').classList.add('idle');
+    $('tagBox').classList.remove('live');
+    $('renewBanner').style.display = 'none';
+    lastLookedUpTag = '';
+    setActivateBtnState();
+});
+
+// Reset form
+$('btnReset').addEventListener('click', () => {
+    $('empForm').reset();
+    $('rfid_tag').value = '';
+    $('renewBanner').style.display = 'none';
+    lastLookedUpTag = '';
+    recalcValidity();
+    setActivateBtnState();
+});
+
+// Submit
+$('empForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = {
+        employee_name:     $('emp_name').value.trim(),
+        department:        $('department').value.trim(),
+        contact_number:    $('contact_number').value.trim(),
+        rfid_tag:          $('rfid_tag').value.trim(),
+        activation_months: parseInt($('activation_months').value, 10),
+        number_plate:      $('number_plate').value.trim(),
+        vehicle_type:      $('vehicle_type').value,
+    };
+    $('btnActivate').disabled = true;
+    $('btnActivate').textContent = 'Activating…';
+    try {
+        const r  = await fetch('/api/employees', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const js = await r.json();
+        if (r.ok && js.status === 'success') {
+            showToast(`✓ Tag ${js.action} for ${body.employee_name}`, 'ok');
+            $('empForm').reset();
+            $('rfid_tag').value = '';
+            $('renewBanner').style.display = 'none';
+            lastLookedUpTag = '';
+            recalcValidity();
+            loadEmployees();
+        } else {
+            showToast(`✗ ${js.message || 'Failed to activate'}`, 'err');
+        }
+    } catch (err) {
+        showToast(`✗ Network error: ${err.message}`, 'err');
+    } finally {
+        $('btnActivate').textContent = 'Activate Tag';
+        setActivateBtnState();
+    }
+});
+
+// Load recent employees
+async function loadEmployees() {
+    try {
+        const r  = await fetch('/api/employees', { cache: 'no-store' });
+        const js = await r.json();
+        const tb = $('empTbody');
+        if (!Array.isArray(js) || js.length === 0) {
+            tb.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:24px;">No employees activated yet.</td></tr>`;
+            return;
+        }
+        tb.innerHTML = js.map(e => `
+            <tr>
+                <td>${e.owner_name || '—'}</td>
+                <td>${e.department || '—'}</td>
+                <td>${e.contact_number || '—'}</td>
+                <td><span class="tag-mono">${e.rfid_tag || '—'}</span></td>
+                <td>${(e.number_plate || '').startsWith('EMP-') ? '<span style="color:#64748b;">(none)</span>' : (e.number_plate || '—')}</td>
+                <td>${e.activated_at ? e.activated_at.slice(0,10) : '—'}</td>
+                <td>${e.valid_until || '—'}</td>
+                <td><span class="pill ${e.status === 'Active' ? 'active' : 'expired'}">${e.status}</span></td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        $('empTbody').innerHTML = `<tr><td colspan="8" style="text-align:center; color:#ef4444; padding:24px;">Failed to load: ${err.message}</td></tr>`;
+    }
+}
+loadEmployees();
+setInterval(loadEmployees, 5000);
+</script>
+</body>
+</html>
