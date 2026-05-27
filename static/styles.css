@@ -1,15 +1,24 @@
 :root {
-  --bg: #f4f6f1;
+  /* Palette shifted teal/forest -> blue/navy to match the SaaS admin look
+     (WeParking / common Element-UI admin templates). Light content area,
+     navy sidebar, bright blue primary. */
+  --bg: #f4f7fa;
   --panel: #ffffff;
-  --text: #1f2a27;
-  --muted: #66706c;
-  --line: #dce2dc;
-  --primary: #127c72;
-  --primary-dark: #0a5e58;
+  --text: #1f2a3d;
+  --muted: #6b7280;
+  --line: #e5e9ef;
+  --primary: #1f73d4;
+  --primary-dark: #1858a6;
   --accent: #d5952a;
   --danger: #b74a42;
   --ok: #2f8b57;
-  --shadow: 0 16px 40px rgba(42, 58, 53, 0.10);
+  --shadow: 0 12px 32px rgba(15, 35, 70, 0.08);
+
+  /* Sidebar palette — navy instead of near-black, slightly lighter hover. */
+  --side-bg: #1d2939;
+  --side-hover: #2a3a52;
+  --side-text: #cbd5e1;
+  --side-text-strong: #f8fafc;
 }
 
 * {
@@ -66,8 +75,8 @@ select {
   flex-direction: column;
   gap: 24px;
   padding: 22px;
-  background: #1d2826;
-  color: #f7faf8;
+  background: var(--side-bg);
+  color: var(--side-text-strong);
 }
 
 .brand {
@@ -88,7 +97,7 @@ select {
 .operator-panel span,
 .operator-panel small {
   display: block;
-  color: #b7c2bd;
+  color: var(--side-text);
   font-size: 0.82rem;
 }
 
@@ -102,19 +111,32 @@ nav {
   justify-content: flex-start;
   padding: 0 14px;
   background: transparent;
-  color: #dce6e1;
+  color: var(--side-text);
   text-align: left;
+  font-weight: 500;
+  border-left: 3px solid transparent;
+  border-radius: 0 7px 7px 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.nav-item:hover,
+.nav-item:hover {
+  background: var(--side-hover);
+  color: var(--side-text-strong);
+}
+
 .nav-item.active {
-  background: #31413d;
+  /* WeParking-style active indicator: filled background + left accent bar
+     in the primary color. Makes the current section visible at a glance. */
+  background: var(--side-hover);
+  color: var(--side-text-strong);
+  border-left-color: var(--primary);
+  font-weight: 700;
 }
 
 .operator-panel {
   margin-top: auto;
   padding: 14px;
-  border: 1px solid #40514c;
+  border: 1px solid var(--side-hover);
   border-radius: 8px;
 }
 
@@ -169,7 +191,8 @@ h2 {
 }
 
 .ghost-button:hover {
-  background: #eef3ef;
+  background: #eef4f9;
+  border-color: #c8d4e3;
 }
 
 .view {
@@ -216,7 +239,7 @@ label {
   height: 8px;
   overflow: hidden;
   border-radius: 99px;
-  background: #e6ece8;
+  background: #e1e8f0;
 }
 
 .meter i {
@@ -264,7 +287,7 @@ table {
 
 th,
 td {
-  padding: 12px 10px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   font-size: 0.92rem;
@@ -274,6 +297,19 @@ th {
   color: var(--muted);
   font-size: 0.78rem;
   text-transform: uppercase;
+  background: #f8fafc;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+/* Subtle row hover — picks up the user's eye scanning down the table,
+   matches the SaaS admin pattern without being noisy. */
+tbody tr {
+  transition: background 0.12s ease;
+}
+
+tbody tr:hover {
+  background: #f5f9fd;
 }
 
 .status {
@@ -282,7 +318,7 @@ th {
   min-height: 26px;
   border-radius: 99px;
   padding: 0 10px;
-  background: #edf7f1;
+  background: #ecfdf5;
   color: var(--ok);
   font-weight: 800;
   font-size: 0.8rem;
