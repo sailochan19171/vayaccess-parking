@@ -1824,6 +1824,45 @@ def api_employees():
             return jsonify({"status": "error",
                             "message": "Vehicle plate format is invalid"}), 400
 
+        # ── Payment gate (added 2026-05-27) ───────────────────────────────
+        # Whitelist activation requires a recorded UPI payment. UHF tag check
+        # above already guarantees a scanned tag is present. Payment fields
+        # are validated client- and server-side so the row never lands in the
+        # DB without them, and a third party can audit who paid what.
+        payment_method = (data.get('payment_method') or '').strip()
+        upi_id         = (data.get('upi_id') or '').strip()
+        transaction_id = (data.get('transaction_id') or '').strip()
+        try:
+            payment_amount = int(data.get('payment_amount', 0) or 0)
+        except (TypeError, ValueError):
+            payment_amount = 0
+
+        ALLOWED_METHODS = {'PhonePe', 'Paytm', 'Google Pay', 'BHIM',
+                           'Amazon Pay', 'Other UPI'}
+        # UPI VPA spec: <handle>@<provider>, handle 2-256 chars alphanumeric/._-,
+        # provider 2-64 chars starting with a letter. e.g. 9876543210@ybl
+        UPI_RE = re.compile(r'^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$')
+        # Transaction ID: provider-issued reference. PhonePe T2..., Paytm digits,
+        # GPay ABCD..., etc. — accept any 8-30 char alphanumeric.
+        TXN_RE = re.compile(r'^[A-Za-z0-9]{8,30}$')
+
+        if payment_method not in ALLOWED_METHODS:
+            return jsonify({"status": "error",
+                            "message": "Select a valid payment method "
+                                       "(PhonePe / Paytm / Google Pay / BHIM / "
+                                       "Amazon Pay / Other UPI)"}), 400
+        if not UPI_RE.match(upi_id):
+            return jsonify({"status": "error",
+                            "message": "UPI ID must look like 'name@provider' "
+                                       "(e.g. 9876543210@ybl)"}), 400
+        if not TXN_RE.match(transaction_id):
+            return jsonify({"status": "error",
+                            "message": "Transaction ID must be 8-30 "
+                                       "alphanumeric characters"}), 400
+        if payment_amount <= 0:
+            return jsonify({"status": "error",
+                            "message": "Payment amount must be greater than 0"}), 400
+
         now = datetime.now()
         from dateutil.relativedelta import relativedelta
         valid_until = now + relativedelta(months=+months)
@@ -1839,6 +1878,11 @@ def api_employees():
             existing.activated_at      = now
             existing.activation_months = months
             existing.valid_until       = valid_until
+            existing.payment_method    = payment_method
+            existing.upi_id            = upi_id
+            existing.transaction_id    = transaction_id
+            existing.payment_amount    = payment_amount
+            existing.paid_at           = now
             # only overwrite plate if a real one was provided this time
             if plate_in:
                 existing.number_plate  = plate_c
@@ -1851,6 +1895,14 @@ def api_employees():
             if plate_clash:
                 return jsonify({"status": "error",
                                 "message": f"Plate {plate_c} is already enrolled"}), 400
+            # Block duplicate transaction IDs: a single UPI txn reference can
+            # only enroll one employee. Catches accidental re-use and basic fraud.
+            txn_clash = Whitelist.query.filter(
+                Whitelist.transaction_id == transaction_id).first()
+            if txn_clash:
+                return jsonify({"status": "error",
+                                "message": f"Transaction ID {transaction_id} "
+                                           f"already used for another enrollment"}), 400
             row = Whitelist(
                 rfid_tag         = rfid_tag,
                 number_plate     = plate_c,
@@ -1861,6 +1913,11 @@ def api_employees():
                 activated_at     = now,
                 activation_months= months,
                 valid_until      = valid_until,
+                payment_method   = payment_method,
+                upi_id           = upi_id,
+                transaction_id   = transaction_id,
+                payment_amount   = payment_amount,
+                paid_at          = now,
             )
             db.session.add(row)
             action = "activated"

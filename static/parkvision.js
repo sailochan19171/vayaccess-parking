@@ -389,9 +389,28 @@ function recalcValidity() {
 $('emp-months').addEventListener('change', recalcValidity);
 recalcValidity();
 
+// Mirror the server-side regex so we don't enable the button for inputs the
+// backend will reject. Same patterns as in templates/activate.html.
+const EMP_UPI_RE = /^[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/;
+const EMP_TXN_RE = /^[A-Za-z0-9]{8,30}$/;
+
 function setSubmitState() {
-  $('emp-submit').disabled = !$('emp-tag').value.trim();
+  const hasTag  = !!$('emp-tag').value.trim();
+  const method  = $('emp-pay-method') ? $('emp-pay-method').value : '';
+  const amount  = $('emp-pay-amount') ? parseInt($('emp-pay-amount').value, 10) : 0;
+  const upi     = $('emp-pay-upi') ? $('emp-pay-upi').value.trim() : '';
+  const txn     = $('emp-pay-txn') ? $('emp-pay-txn').value.trim() : '';
+  const payOk   = !!method && amount > 0 && EMP_UPI_RE.test(upi) && EMP_TXN_RE.test(txn);
+  $('emp-submit').disabled = !(hasTag && payOk);
 }
+
+// Re-check button state whenever any payment field changes.
+['emp-pay-method', 'emp-pay-amount', 'emp-pay-upi', 'emp-pay-txn'].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('input',  setSubmitState);
+  el.addEventListener('change', setSubmitState);
+});
 
 function clearEmpForm() {
   $('emp-name').value    = '';
@@ -498,6 +517,10 @@ $('emp-form').addEventListener('submit', async (e) => {
     activation_months: parseInt($('emp-months').value, 10),
     number_plate:      $('emp-plate').value.trim(),
     vehicle_type:      $('emp-vtype').value,
+    payment_method:    $('emp-pay-method').value,
+    payment_amount:    parseInt($('emp-pay-amount').value, 10) || 0,
+    upi_id:            $('emp-pay-upi').value.trim(),
+    transaction_id:    $('emp-pay-txn').value.trim(),
   };
   $('emp-submit').disabled = true;
   $('emp-submit').textContent = 'Activating…';

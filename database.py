@@ -18,6 +18,13 @@ class Whitelist(db.Model):
     activated_at    = db.Column(db.DateTime,    nullable=True)
     activation_months = db.Column(db.Integer,   nullable=True)  # original validity period, kept for renewal
     vehicle_type = db.Column(db.String(50), nullable=True, default="Car") # e.g. Car, Truck, Bike, Scooty
+    # ── Activation payment (added 2026-05-27) ─────────────────────────────────
+    # Mandatory at activation time for new enrollments. Legacy rows have NULLs.
+    payment_method = db.Column(db.String(40),  nullable=True)  # PhonePe / Paytm / Google Pay / BHIM / Amazon Pay / Other UPI
+    upi_id         = db.Column(db.String(120), nullable=True)  # e.g. 9876543210@ybl
+    transaction_id = db.Column(db.String(40),  nullable=True)  # 8-30 alphanumeric
+    payment_amount = db.Column(db.Integer,     nullable=True)  # INR
+    paid_at        = db.Column(db.DateTime,    nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     valid_until = db.Column(db.DateTime, nullable=False)
 
@@ -42,6 +49,11 @@ class Whitelist(db.Model):
             "vehicle_category": self.vehicle_category,
             "activated_at":   self.activated_at.strftime("%Y-%m-%d %H:%M:%S") if self.activated_at else None,
             "activation_months": self.activation_months,
+            "payment_method": self.payment_method or "",
+            "upi_id":         self.upi_id         or "",
+            "transaction_id": self.transaction_id or "",
+            "payment_amount": self.payment_amount or 0,
+            "paid_at":        self.paid_at.strftime("%Y-%m-%d %H:%M:%S") if self.paid_at else None,
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else "N/A",
             "valid_until": self.valid_until.strftime("%Y-%m-%d"),
             "status": "Active" if self.is_valid() else "Expired"
@@ -49,31 +61,54 @@ class Whitelist(db.Model):
 
 
 def migrate_schema(engine):
-    """Idempotently add new columns to whitelist for existing SQLite parking.db
-    files. SQLite ADD COLUMN was used to evolve schemas in place. For Postgres
-    deployments db.create_all() already includes every column in the model, so
-    this becomes a no-op. We detect the dialect and skip on non-sqlite."""
-    if engine.dialect.name != 'sqlite':
+    """Idempotently add new columns to evolved tables. Handles both SQLite
+    (local dev) and Postgres (Render/Neon). db.create_all() only creates
+    missing tables, not missing columns on existing tables — so when a
+    deployed Postgres already has the table from an earlier deploy, we still
+    need ALTER TABLE to roll new columns forward."""
+    dialect = engine.dialect.name
+    if dialect not in ('sqlite', 'postgresql'):
         return
-    new_cols = [
+
+    # Columns to ensure exist on each table. Same types map cleanly to both
+    # dialects below (SQLite is type-flexible; Postgres needs proper types).
+    whitelist_new = [
         ("department",       "VARCHAR(100)"),
         ("contact_number",   "VARCHAR(20)"),
-        ("activated_at",     "DATETIME"),
+        ("activated_at",     "TIMESTAMP"),       # SQLite accepts; Postgres needs TIMESTAMP not DATETIME
         ("activation_months","INTEGER"),
+        ("payment_method",   "VARCHAR(40)"),
+        ("upi_id",           "VARCHAR(120)"),
+        ("transaction_id",   "VARCHAR(40)"),
+        ("payment_amount",   "INTEGER"),
+        ("paid_at",          "TIMESTAMP"),
     ]
-    with engine.connect() as conn:
-        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(whitelist)"))}
-        for col, ctype in new_cols:
-            if col not in existing:
-                conn.execute(text(f"ALTER TABLE whitelist ADD COLUMN {col} {ctype}"))
-                print(f"[DB] migrate: added whitelist.{col}")
+    access_logs_new = [
+        ("department",     "VARCHAR(100)"),
+        ("contact_number", "VARCHAR(20)"),
+    ]
 
-        # access_logs: snapshot of employee fields for the Reports view
-        existing_al = {row[1] for row in conn.execute(text("PRAGMA table_info(access_logs)"))}
-        for col, ctype in (("department", "VARCHAR(100)"), ("contact_number", "VARCHAR(20)")):
-            if col not in existing_al:
-                conn.execute(text(f"ALTER TABLE access_logs ADD COLUMN {col} {ctype}"))
-                print(f"[DB] migrate: added access_logs.{col}")
+    def _existing_cols(conn, table):
+        if dialect == 'sqlite':
+            return {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+        # Postgres
+        rows = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = :t
+        """), {"t": table})
+        return {r[0] for r in rows}
+
+    with engine.connect() as conn:
+        for table, cols in (('whitelist', whitelist_new),
+                            ('access_logs', access_logs_new)):
+            existing = _existing_cols(conn, table)
+            for col, ctype in cols:
+                if col not in existing:
+                    # IF NOT EXISTS works on both modern SQLite and Postgres,
+                    # but SQLite added it only in 3.35. Guard via the existence
+                    # check we just did, so a bare ADD COLUMN works everywhere.
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}"))
+                    print(f"[DB] migrate: added {table}.{col}")
         conn.commit()
 
 

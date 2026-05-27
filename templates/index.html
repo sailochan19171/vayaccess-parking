@@ -965,6 +965,45 @@
                 </div>
                 <label>RFID Tag (from SRK-F206)
                   <input type="text" id="emp-tag" readonly placeholder="Scan a tag first…"></label>
+
+                <!-- ── 3 · Payment ────────────────────────────────────────── -->
+                <div style="margin: 16px 0 4px; padding-top: 14px;
+                            border-top: 1px dashed var(--line);">
+                  <h4 style="margin: 0 0 4px; font-size: 1em; color: var(--primary);">3 · Payment Confirmation</h4>
+                  <p class="hint" style="margin: 0 0 12px;">Whitelist activation
+                    requires a verified UPI payment. All four fields are
+                    mandatory and validated server-side.</p>
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px;">
+                  <label>Payment Method *
+                    <select id="emp-pay-method" required>
+                      <option value="" selected disabled>— Select method —</option>
+                      <option value="PhonePe">PhonePe</option>
+                      <option value="Paytm">Paytm</option>
+                      <option value="Google Pay">Google Pay</option>
+                      <option value="BHIM">BHIM</option>
+                      <option value="Amazon Pay">Amazon Pay</option>
+                      <option value="Other UPI">Other UPI</option>
+                    </select>
+                  </label>
+                  <label>Amount Paid (₹) *
+                    <input type="number" id="emp-pay-amount" required min="1" step="1"
+                           placeholder="e.g. 2500">
+                  </label>
+                </div>
+                <label>UPI ID *
+                  <input type="text" id="emp-pay-upi" required
+                         placeholder="e.g. 9876543210@ybl"
+                         pattern="[a-zA-Z0-9._\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}"
+                         title="Format: name@provider — e.g. 9876543210@ybl">
+                </label>
+                <label>Transaction ID *
+                  <input type="text" id="emp-pay-txn" required
+                         placeholder="e.g. T2402151234567890"
+                         pattern="[A-Za-z0-9]{8,30}"
+                         title="8-30 alphanumeric characters">
+                </label>
+
                 <div style="display:flex; gap:10px; margin-top: 12px;">
                   <button type="button" class="ghost-button" id="emp-reset">Reset</button>
                   <button type="submit" id="emp-submit" disabled>Activate Tag</button>
