@@ -1333,7 +1333,7 @@ async function loadEmployees() {
     const js = await r.json();
     const tb = $('emp-tbody');
     if (!Array.isArray(js) || !js.length) {
-      tb.innerHTML = `<tr><td colspan="9" style="text-align:center; opacity:0.6; padding:20px;">No employees activated yet.</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="10" style="text-align:center; opacity:0.6; padding:20px;">No employees activated yet.</td></tr>`;
       $('emp-count').textContent = '';
       return;
     }
@@ -1376,6 +1376,16 @@ async function loadEmployees() {
                         data-renew-tag="${e.rfid_tag || ''}"
                         style="padding:4px 10px; font-size:0.78em;">↻ Extend</button>`
             : `<span style="opacity:0.45; font-size:0.85em;">—</span>`;
+      // Compact payment cell: "PhonePe · ₹2500" with the rest of the
+      // payment details exposed via title= tooltip so the row stays narrow.
+      // Legacy rows (no payment captured) get a muted "—".
+      const payCell = e.payment_method
+        ? `<span title="UPI ID: ${e.upi_id || '—'}\nTxn: ${e.transaction_id || '—'}\nPaid: ${e.paid_at || '—'}"
+                 style="white-space:nowrap; cursor:help;">
+              <b>${e.payment_method}</b><br>
+              <small style="opacity:0.75;">₹${e.payment_amount || 0}${e.paid_at ? ' · ' + e.paid_at.slice(0,10) : ''}</small>
+           </span>`
+        : `<span style="opacity:0.45; font-size:0.85em;">—</span>`;
       return `
       <tr>
         <td>${e.owner_name || '—'}</td>
@@ -1383,6 +1393,7 @@ async function loadEmployees() {
         <td>${e.contact_number || '—'}</td>
         <td style="font-family:monospace; font-size:0.85em;">${e.rfid_tag || '—'}</td>
         <td>${(e.number_plate || '').startsWith('EMP-') ? '<i style="opacity:0.5;">(none)</i>' : (e.number_plate || '—')}</td>
+        <td>${payCell}</td>
         <td>${e.activated_at ? e.activated_at.slice(0,10) : '—'}</td>
         <td>${validLabel}</td>
         <td>${statusBadge}</td>
