@@ -2717,6 +2717,126 @@ def api_dictionary_delete(did):
     return jsonify({"status": "ok"})
 
 
+# ── Edit (PUT) endpoints for the CRUD tables ─────────────────────────────────
+# Each updates only the fields present in the body, then returns the row.
+@app.route('/api/accounts/<int:aid>', methods=['PUT'])
+def api_accounts_update(aid):
+    row = Account.query.get(aid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'name' in d:
+        nm = (d.get('name') or '').strip()
+        if not nm:
+            return jsonify({"status": "error", "message": "Account name is required"}), 400
+        row.name = nm
+    if 'nickname' in d: row.nickname = (d.get('nickname') or '').strip() or None
+    if 'contact'  in d: row.contact  = (d.get('contact')  or '').strip() or None
+    if 'role'     in d: row.role     = (d.get('role')     or '').strip() or None
+    db.session.commit()
+    AuditEvent.log(f"Account updated: {row.name}", area='System')
+    return jsonify({"status": "ok", "account": row.to_dict()})
+
+
+@app.route('/api/roles/<int:rid>', methods=['PUT'])
+def api_roles_update(rid):
+    row = Role.query.get(rid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'name' in d:
+        nm = (d.get('name') or '').strip()
+        if not nm:
+            return jsonify({"status": "error", "message": "Role name is required"}), 400
+        row.name = nm
+    if 'description' in d: row.description = (d.get('description') or '').strip() or None
+    db.session.commit()
+    AuditEvent.log(f"Role updated: {row.name}", area='System')
+    return jsonify({"status": "ok", "role": row.to_dict()})
+
+
+@app.route('/api/dictionary/<int:did>', methods=['PUT'])
+def api_dictionary_update(did):
+    row = DictionaryEntry.query.get(did)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'category' in d:
+        cat = (d.get('category') or '').strip()
+        if not cat:
+            return jsonify({"status": "error", "message": "Category is required"}), 400
+        row.category = cat
+    if 'key' in d:
+        k = (d.get('key') or '').strip()
+        if not k:
+            return jsonify({"status": "error", "message": "Key is required"}), 400
+        row.dict_key = k
+    if 'value' in d: row.dict_value = (d.get('value') or '').strip() or None
+    db.session.commit()
+    AuditEvent.log(f"Dictionary updated: {row.category}/{row.dict_key}", area='System')
+    return jsonify({"status": "ok", "entry": row.to_dict()})
+
+
+@app.route('/api/yards/<int:yid>', methods=['PUT'])
+def api_yards_update(yid):
+    row = Yard.query.get(yid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'name' in d:
+        nm = (d.get('name') or '').strip()
+        if not nm:
+            return jsonify({"status": "error", "message": "Yard name is required"}), 400
+        row.name = nm
+    if 'capacity' in d:
+        try:
+            row.capacity = max(0, int(d.get('capacity', 0) or 0))
+        except (TypeError, ValueError):
+            pass
+    if 'location' in d: row.location = (d.get('location') or '').strip() or None
+    if 'region'   in d: row.region   = (d.get('region')   or '').strip() or None
+    db.session.commit()
+    AuditEvent.log(f"Yard updated: {row.name}", area='Admin')
+    return jsonify({"status": "ok", "yard": row.to_dict()})
+
+
+@app.route('/api/regions/<int:rid>', methods=['PUT'])
+def api_regions_update(rid):
+    row = Region.query.get(rid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'name' in d:
+        nm = (d.get('name') or '').strip()
+        if not nm:
+            return jsonify({"status": "error", "message": "Region name is required"}), 400
+        row.name = nm
+    if 'description' in d: row.description = (d.get('description') or '').strip() or None
+    db.session.commit()
+    AuditEvent.log(f"Region updated: {row.name}", area='Admin')
+    return jsonify({"status": "ok", "region": row.to_dict()})
+
+
+@app.route('/api/visitors/<int:vid>', methods=['PUT'])
+def api_visitors_update(vid):
+    row = Visitor.query.get(vid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'name' in d:
+        nm = (d.get('name') or '').strip()
+        if not nm:
+            return jsonify({"status": "error", "message": "Visitor name is required"}), 400
+        row.name = nm
+    if 'number_plate'  in d: row.number_plate  = (d.get('number_plate') or '').strip().upper() or None
+    if 'contact'       in d: row.contact       = (d.get('contact') or '').strip() or None
+    if 'purpose'       in d: row.purpose       = (d.get('purpose') or '').strip() or None
+    if 'host_employee' in d: row.host_employee = (d.get('host_employee') or '').strip() or None
+    db.session.commit()
+    AuditEvent.log(f"Visitor updated: {row.name}", area='Admin')
+    return jsonify({"status": "ok", "visitor": row.to_dict()})
+
+
 # ── Visitors (time-bound temporary access) ───────────────────────────────────
 @app.route('/api/visitors', methods=['GET', 'POST'])
 def api_visitors():

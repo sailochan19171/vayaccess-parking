@@ -1679,6 +1679,22 @@
     </div>
 
     <div id="toast" role="status" aria-live="polite"></div>
+
+    <!-- Generic edit modal — reused by all CRUD tables (Account/Role/Dictionary/
+         Yard/Region/Visitor). Fields are injected per-section by parkvision.js. -->
+    <div id="edit-modal" class="edit-modal-backdrop" style="display:none;">
+      <div class="edit-modal">
+        <div class="edit-modal-head">
+          <h3 id="edit-modal-title">Edit</h3>
+          <button type="button" id="edit-modal-x" class="ghost-button" style="padding:2px 10px;">✕</button>
+        </div>
+        <div id="edit-modal-fields"></div>
+        <div class="edit-modal-actions">
+          <button type="button" class="ghost-button" id="edit-modal-cancel">Cancel</button>
+          <button type="button" id="edit-modal-save">Save Changes</button>
+        </div>
+      </div>
+    </div>
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->

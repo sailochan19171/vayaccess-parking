@@ -2179,7 +2179,7 @@ async function loadYards() {
       <td>${y.available}</td>
       <td>${_esc(y.location) || '—'}</td>
       <td>${_esc(y.region) || '—'}</td>
-      <td><button class="ghost-button yard-del" data-id="${y.id}"
+      <td><button class="ghost-button" data-edit="${y.id}" data-edit-sec="yard" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button yard-del" data-id="${y.id}"
              style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
     </tr>`, 7, (tb) => {
       tb.querySelectorAll('.yard-del').forEach(b => b.addEventListener('click', async () => {
@@ -2203,7 +2203,7 @@ async function loadRegions() {
       <td>${rg.yard_count}</td>
       <td>${_esc(rg.description) || '—'}</td>
       <td>${_esc(rg.created_at)}</td>
-      <td><button class="ghost-button region-del" data-id="${rg.id}"
+      <td><button class="ghost-button" data-edit="${rg.id}" data-edit-sec="region" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button region-del" data-id="${rg.id}"
              style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
     </tr>`, 5, (tb) => {
       tb.querySelectorAll('.region-del').forEach(b => b.addEventListener('click', async () => {
@@ -2344,7 +2344,7 @@ async function loadVisitorsView() {
         <td>${_esc(v.start_at) || '—'}</td>
         <td>${_esc(v.end_at) || '—'}</td>
         <td><span class="scan-status-badge ${badge}">${_esc(v.status) || '—'}</span></td>
-        <td><button class="ghost-button vis-del" data-id="${v.id}"
+        <td><button class="ghost-button" data-edit="${v.id}" data-edit-sec="vis" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button vis-del" data-id="${v.id}"
                style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
       </tr>`;
     }, 9, (tb) => {
@@ -2468,7 +2468,7 @@ async function loadAccounts() {
       <td>${_esc(a.contact) || '—'}</td>
       <td>${_esc(a.role) || '—'}</td>
       <td>${_esc(a.created_at)}</td>
-      <td><button class="ghost-button acc-del" data-id="${a.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+      <td><button class="ghost-button" data-edit="${a.id}" data-edit-sec="acc" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button acc-del" data-id="${a.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
     </tr>`, 6, (tb) => {
       tb.querySelectorAll('.acc-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this account?')) return;
@@ -2490,7 +2490,7 @@ async function loadRolesView() {
       <td>${r.account_count}</td>
       <td>${_esc(r.description) || '—'}</td>
       <td>${_esc(r.created_at)}</td>
-      <td><button class="ghost-button rl-del" data-id="${r.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+      <td><button class="ghost-button" data-edit="${r.id}" data-edit-sec="rl" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button rl-del" data-id="${r.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
     </tr>`, 5, (tb) => {
       tb.querySelectorAll('.rl-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this role?')) return;
@@ -2519,7 +2519,7 @@ async function loadDictionary() {
       <td>${_esc(d.key)}</td>
       <td>${_esc(d.value) || '—'}</td>
       <td>${_esc(d.created_at)}</td>
-      <td><button class="ghost-button dc-del" data-id="${d.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+      <td><button class="ghost-button" data-edit="${d.id}" data-edit-sec="dc" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button dc-del" data-id="${d.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
     </tr>`, 5, (tb) => {
       tb.querySelectorAll('.dc-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this entry?')) return;
@@ -2573,3 +2573,79 @@ $('region-search')?.addEventListener('input', loadRegions);
 $('acc-search')?.addEventListener('input', loadAccounts);
 $('rl-search')?.addEventListener('input', loadRolesView);
 $('dc-search')?.addEventListener('input', loadDictionary);
+
+// ── Phase 6: generic Edit modal for all CRUD tables ──────────────────────────
+// A single modal edits any row. The Edit button in each table row carries
+// data-edit (id) + data-edit-sec (section key). We look the row up in the
+// paginator's stored rows, populate the modal, and PUT on save. This never
+// touches the Add forms, so create/edit stay independent.
+const _editCrud = {
+  acc:    { url: '/api/accounts', title: 'Edit Account', reload: () => loadAccounts(),
+            fields: [{ k: 'name', label: 'Account Name' }, { k: 'nickname', label: 'Nickname' },
+                     { k: 'contact', label: 'Contact' }, { k: 'role', label: 'Role', selectFrom: 'acc-role' }] },
+  rl:     { url: '/api/roles', title: 'Edit Role', reload: () => loadRolesView(),
+            fields: [{ k: 'name', label: 'Role Name' }, { k: 'description', label: 'Description' }] },
+  dc:     { url: '/api/dictionary', title: 'Edit Dictionary Entry', reload: () => loadDictionary(),
+            fields: [{ k: 'category', label: 'Category' }, { k: 'key', label: 'Key' }, { k: 'value', label: 'Value' }] },
+  yard:   { url: '/api/yards', title: 'Edit Yard', reload: () => { loadRegions(); loadYards(); },
+            fields: [{ k: 'name', label: 'Yard Name' }, { k: 'capacity', label: 'Capacity', type: 'number' },
+                     { k: 'location', label: 'Location' }, { k: 'region', label: 'Region', selectFrom: 'yard-region' }] },
+  region: { url: '/api/regions', title: 'Edit Region', reload: () => loadRegions(),
+            fields: [{ k: 'name', label: 'Region Name' }, { k: 'description', label: 'Description' }] },
+  vis:    { url: '/api/visitors', title: 'Edit Visitor', reload: () => loadVisitorsView(),
+            fields: [{ k: 'name', label: 'Visitor Name' }, { k: 'number_plate', label: 'License Plate' },
+                     { k: 'contact', label: 'Contact' }, { k: 'purpose', label: 'Purpose' },
+                     { k: 'host_employee', label: 'Host Employee' }] },
+};
+let _editCtx = null;
+
+function openEditModal(sec, id) {
+  const cfg = _editCrud[sec]; if (!cfg) return;
+  const row = (_pager[sec]?.rows || []).find(r => String(r.id) === String(id));
+  if (!row) return;
+  _editCtx = { sec, id };
+  $('edit-modal-title').textContent = cfg.title;
+  const host = $('edit-modal-fields');
+  host.innerHTML = cfg.fields.map(f => {
+    const val = row[f.k] != null ? row[f.k] : '';
+    if (f.selectFrom) {
+      const src = $(f.selectFrom);
+      return `<label>${f.label}<select data-fk="${f.k}">${src ? src.innerHTML : ''}</select></label>`;
+    }
+    return `<label>${f.label}<input type="${f.type || 'text'}" data-fk="${f.k}" value="${_esc(val)}"></label>`;
+  }).join('');
+  // Set select values after the options are in the DOM.
+  cfg.fields.filter(f => f.selectFrom).forEach(f => {
+    const el = host.querySelector(`[data-fk="${f.k}"]`);
+    if (el) el.value = row[f.k] != null ? row[f.k] : '';
+  });
+  $('edit-modal').style.display = 'flex';
+}
+function closeEditModal() { const m = $('edit-modal'); if (m) m.style.display = 'none'; _editCtx = null; }
+
+$('edit-modal-cancel')?.addEventListener('click', closeEditModal);
+$('edit-modal-x')?.addEventListener('click', closeEditModal);
+$('edit-modal')?.addEventListener('click', (e) => { if (e.target.id === 'edit-modal') closeEditModal(); });
+$('edit-modal-save')?.addEventListener('click', async () => {
+  if (!_editCtx) return;
+  const cfg = _editCrud[_editCtx.sec];
+  const body = {};
+  $('edit-modal-fields').querySelectorAll('[data-fk]').forEach(el => {
+    body[el.dataset.fk] = el.type === 'number' ? (parseInt(el.value, 10) || 0) : el.value.trim();
+  });
+  const btn = $('edit-modal-save'); btn.disabled = true;
+  try {
+    const r = await fetch(`${cfg.url}/${_editCtx.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const js = await r.json();
+    if (r.ok && js.status === 'ok') { toast('✓ Updated', 'ok'); const reload = cfg.reload; closeEditModal(); reload(); }
+    else { toast('✗ ' + (js.message || 'Failed'), 'err'); }
+  } catch (e) { toast('✗ Network error', 'err'); }
+  finally { btn.disabled = false; }
+});
+// Delegated: any [data-edit] button opens the modal for its section + id.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-edit]');
+  if (b) openEditModal(b.dataset.editSec, b.dataset.edit);
+});

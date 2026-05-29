@@ -1087,6 +1087,47 @@ td, th, .epc, code, .scan-row dd,
 .tbl-page-info b { color: var(--primary); }
 .tbl-page-meta { color: var(--muted); margin-left: 4px; }
 
+/* Generic edit modal (shared by all CRUD tables). */
+.edit-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+.edit-modal {
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 22px;
+  width: 100%;
+  max-width: 460px;
+  box-shadow: 0 24px 60px rgba(15, 35, 70, 0.25);
+}
+.edit-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.edit-modal-head h3 { margin: 0; font-size: 1.2rem; }
+.edit-modal label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.edit-modal label input,
+.edit-modal label select { margin-top: 4px; }
+.edit-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
 /* ──────────────────────────────────────────────────────────────────────
    Consistent alignment for every data table added in the WeParking rebuild
    (dashboard Access History, Order Management, and the Parking/Scanning/
