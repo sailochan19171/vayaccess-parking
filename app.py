@@ -2329,17 +2329,27 @@ def api_exit_close():
 # ── Settings (capacity, backup schedule) ─────────────────────────────────────
 @app.route('/api/settings', methods=['GET', 'POST'])
 def api_settings():
+    # Basic facility settings + Entry/Exit settings share the key/value Setting
+    # store. The UI splits them into two pages (Basic Settings, Entry/Exit
+    # Settings) but they all persist here.
+    SETTING_KEYS = ('capacity', 'backup_schedule', 'default_entry_zone',
+                    'entry_grace_minutes', 'exit_grace_minutes',
+                    'auto_open_barrier', 'rescan_cooldown_seconds')
     if request.method == 'POST':
         data = request.json or {}
-        for key in ('capacity', 'backup_schedule', 'default_entry_zone'):
+        for key in SETTING_KEYS:
             if key in data:
                 Setting.set(key, data[key])
         AuditEvent.log("Facility settings updated", area='Admin')
         return jsonify({"status": "ok"})
     return jsonify({
-        "capacity":           int(Setting.get('capacity', '120')),
-        "backup_schedule":    Setting.get('backup_schedule', 'Daily at 02:00'),
-        "default_entry_zone": Setting.get('default_entry_zone', 'Auto Gate'),
+        "capacity":                int(Setting.get('capacity', '120')),
+        "backup_schedule":         Setting.get('backup_schedule', 'Daily at 02:00'),
+        "default_entry_zone":      Setting.get('default_entry_zone', 'Auto Gate'),
+        "entry_grace_minutes":     int(Setting.get('entry_grace_minutes', '5')),
+        "exit_grace_minutes":      int(Setting.get('exit_grace_minutes', '10')),
+        "auto_open_barrier":       Setting.get('auto_open_barrier', '1'),
+        "rescan_cooldown_seconds": int(Setting.get('rescan_cooldown_seconds', '30')),
     })
 
 

@@ -16,9 +16,15 @@ function switchView(name) {
     video: 'Video Monitoring',       'parking-records': 'Parking Records',
     'scanning-record': 'Scanning Record', devices: 'Lane Monitoring',
     exit: 'Manual Exit Record',      orders: 'Order Management',
-    admin: 'Member Management',      registered: 'Registered Vehicle',
+    admin: 'Whitelist',              registered: 'Registered Vehicle',
     blacklist: 'Black List',         yard: 'Yard Management',
     region: 'Region Management',     entry: 'Entry', tariffs: 'Tariffs',
+    membership: 'Monthly Membership', 'type-mgmt': 'Type Management',
+    visitors: 'Visitor Management',  equipment: 'Equipment Management',
+    'settings-basic': 'Basic Settings', 'settings-entry-exit': 'Entry / Exit Settings',
+    account: 'Account Management',   lcd: 'LCD Display',
+    'menu-mgmt': 'Menu Management',  role: 'Role Management',
+    'role-perm': 'Role Permission',  dictionary: 'Dictionary Managed',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
 }
@@ -2198,3 +2204,178 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
 $('od-search')?.addEventListener('input', loadOrders);
 $('od-type')?.addEventListener('change', loadOrders);
 $('od-refresh')?.addEventListener('click', loadOrders);
+
+// ── Phase 4: Member sub-menu / Type / Visitors / Equipment / Settings ────────
+async function loadMembership() {
+  const tb = $('mm-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/employees', { cache: 'no-store' });
+    const js = await r.json();
+    const q = ($('mm-search')?.value || '').trim().toUpperCase();
+    const rows = (Array.isArray(js) ? js : []).filter(e =>
+      !q || (e.owner_name || '').toUpperCase().includes(q) || (e.number_plate || '').toUpperCase().includes(q));
+    if ($('mm-meta')) $('mm-meta').textContent = `${rows.length} member(s)`;
+    tb.innerHTML = rows.length ? rows.map(e => {
+      const plan = e.activation_months ? `${e.activation_months} month${e.activation_months > 1 ? 's' : ''}` : '—';
+      const badge = e.status === 'Active'
+        ? '<span class="scan-status-badge granted">Active</span>'
+        : '<span class="scan-status-badge denied">Expired</span>';
+      return `<tr>
+        <td><b>${_esc(e.owner_name) || '—'}</b></td>
+        <td style="font-family:monospace;">${_esc(e.number_plate) || '—'}</td>
+        <td style="font-family:monospace; font-size:0.88em;">${_esc(e.rfid_tag) || '—'}</td>
+        <td>${_esc(e.department) || '—'}</td>
+        <td>${plan}</td>
+        <td>₹${e.payment_amount || 0}</td>
+        <td>${_esc(e.valid_until) || '—'}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('') : _emptyRow(8, 'No members yet.');
+  } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
+}
+
+async function loadTypes() {
+  const tb = $('tm-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/tariffs', { cache: 'no-store' });
+    const js = await r.json();
+    const rows = Array.isArray(js) ? js : [];
+    if ($('tm-meta')) $('tm-meta').textContent = `${rows.length} type(s)`;
+    tb.innerHTML = rows.length ? rows.map(t => `<tr>
+      <td><b>${_esc(t.type)}</b></td>
+      <td>${_esc(t.model) || '—'}</td>
+      <td>₹${t.rate || 0}/hr</td>
+      <td>₹${t.dailyCap || 0}</td>
+      <td>₹${t.lost || 0}</td>
+    </tr>`).join('') : _emptyRow(5, 'No vehicle types defined.');
+  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+}
+
+async function loadVisitorsView() {
+  const tb = $('vis-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/visitors', { cache: 'no-store' });
+    const js = await r.json();
+    const rows = Array.isArray(js) ? js : [];
+    if ($('vis-meta')) $('vis-meta').textContent = `${rows.length} visitor(s)`;
+    tb.innerHTML = rows.length ? rows.map(v => {
+      const st = (v.status || '').toLowerCase();
+      const badge = st.includes('active') ? 'granted' : st.includes('expir') ? 'denied' : 'scanning';
+      return `<tr>
+        <td><b>${_esc(v.name)}</b></td>
+        <td style="font-family:monospace;">${_esc(v.number_plate) || '—'}</td>
+        <td>${_esc(v.contact) || '—'}</td>
+        <td>${_esc(v.purpose) || '—'}</td>
+        <td>${_esc(v.host_employee) || '—'}</td>
+        <td>${_esc(v.start_at) || '—'}</td>
+        <td>${_esc(v.end_at) || '—'}</td>
+        <td><span class="scan-status-badge ${badge}">${_esc(v.status) || '—'}</span></td>
+        <td><button class="ghost-button vis-del" data-id="${v.id}"
+               style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+      </tr>`;
+    }).join('') : _emptyRow(9, 'No visitor passes yet — add one above.');
+    tb.querySelectorAll('.vis-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this visitor pass?')) return;
+      await fetch(`/api/visitors/${b.dataset.id}`, { method: 'DELETE' });
+      loadVisitorsView();
+    }));
+  } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
+}
+
+$('vis-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    name:          $('vis-name').value.trim(),
+    number_plate:  $('vis-plate').value.trim(),
+    contact:       $('vis-contact').value.trim(),
+    purpose:       $('vis-purpose').value.trim(),
+    host_employee: $('vis-host').value.trim(),
+  };
+  const btn = $('vis-submit'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/visitors', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const js = await r.json();
+    if (r.ok && (js.status === 'ok' || js.id)) { toast(`✓ Visitor "${body.name}" added`, 'ok'); $('vis-form').reset(); loadVisitorsView(); }
+    else { toast('✗ ' + (js.message || 'Failed'), 'err'); }
+  } catch (err) { toast('✗ Network error', 'err'); }
+  finally { btn.disabled = false; }
+});
+
+async function loadEquipment() {
+  const tb = $('eq-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/devices', { cache: 'no-store' });
+    const js = await r.json();
+    const rows = Array.isArray(js) ? js : [];
+    if ($('eq-meta')) $('eq-meta').textContent = `${rows.length} device(s)`;
+    const badge = (s) => /online|connected|ready|streaming/i.test(s)
+      ? `<span class="scan-status-badge granted">${_esc(s)}</span>`
+      : `<span class="scan-status-badge denied">${_esc(s)}</span>`;
+    tb.innerHTML = rows.length ? rows.map(d => `<tr>
+      <td><b>${_esc(d.name)}</b></td>
+      <td>${_esc(d.type)}</td>
+      <td>${badge(d.status)}</td>
+      <td>${_esc(d.lastSeen) || '—'}</td>
+    </tr>`).join('') : _emptyRow(4, 'No devices reported.');
+  } catch (e) { tb.innerHTML = _emptyRow(4, 'Failed to load.'); }
+}
+
+async function loadBasicSettings() {
+  try {
+    const s = await (await fetch('/api/settings', { cache: 'no-store' })).json();
+    if ($('sb-capacity')) $('sb-capacity').value = s.capacity ?? '';
+    if ($('sb-zone'))     $('sb-zone').value     = s.default_entry_zone ?? '';
+    if ($('sb-backup'))   $('sb-backup').value   = s.backup_schedule ?? '';
+    if ($('se-entry-grace')) $('se-entry-grace').value = s.entry_grace_minutes ?? '';
+    if ($('se-exit-grace'))  $('se-exit-grace').value  = s.exit_grace_minutes ?? '';
+    if ($('se-cooldown'))    $('se-cooldown').value    = s.rescan_cooldown_seconds ?? '';
+    if ($('se-auto-barrier')) $('se-auto-barrier').value = String(s.auto_open_barrier ?? '1');
+  } catch (e) { /* ignore */ }
+}
+
+$('sb-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    capacity:           parseInt($('sb-capacity').value, 10) || 0,
+    default_entry_zone: $('sb-zone').value.trim(),
+    backup_schedule:    $('sb-backup').value.trim(),
+  };
+  try {
+    const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast(r.ok ? '✓ Basic settings saved' : '✗ Failed', r.ok ? 'ok' : 'err');
+  } catch (err) { toast('✗ Network error', 'err'); }
+});
+
+$('se-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    entry_grace_minutes:     parseInt($('se-entry-grace').value, 10) || 0,
+    exit_grace_minutes:      parseInt($('se-exit-grace').value, 10) || 0,
+    auto_open_barrier:       $('se-auto-barrier').value,
+    rescan_cooldown_seconds: parseInt($('se-cooldown').value, 10) || 0,
+  };
+  try {
+    const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast(r.ok ? '✓ Entry/Exit settings saved' : '✗ Failed', r.ok ? 'ok' : 'err');
+  } catch (err) { toast('✗ Network error', 'err'); }
+});
+
+// Register Phase-4 sections with the open-on-click + live-refresh system.
+Object.assign(_liveLoaders, {
+  'membership':          loadMembership,
+  'type-mgmt':           loadTypes,
+  'visitors':            loadVisitorsView,
+  'equipment':           loadEquipment,
+  'settings-basic':      loadBasicSettings,
+  'settings-entry-exit': loadBasicSettings,   // same endpoint feeds both forms
+});
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  const v = btn.dataset.view || btn.dataset.jump;
+  if (v && _liveLoaders[v] && ['membership','type-mgmt','visitors','equipment','settings-basic','settings-entry-exit'].includes(v)) {
+    btn.addEventListener('click', () => setTimeout(_liveLoaders[v], 30));
+  }
+});
+$('mm-search')?.addEventListener('input', loadMembership);
+$('vis-search')?.addEventListener('input', loadVisitorsView);

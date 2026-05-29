@@ -266,11 +266,52 @@
           <button class="nav-item" data-view="devices"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21 7 3M20 21 17 3M12 3v3M12 10v3M12 17v3"/></svg></span>Lane Monitoring</button>
           <button class="nav-item" data-view="exit"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span>Manual Exit Record</button>
           <button class="nav-item" data-view="orders"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2v20l2.5-1.5L10 22l2-1.5L14 22l2.5-1.5L19 22V2l-2.5 1.5L14 2l-2 1.5L10 2 7.5 3.5z"/><path d="M9 8h6M9 12h4"/></svg></span>Order Management</button>
-          <button class="nav-item" data-view="admin"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/></svg></span>Member Management</button>
+          <!-- Member Management — expandable group -->
+          <button class="nav-item nav-group" data-group="member-mgmt" aria-expanded="false">
+            <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/></svg></span>Member Management<span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-sub" data-group-body="member-mgmt">
+            <button class="nav-item nav-child" data-view="membership"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg></span>Monthly Membership</button>
+            <button class="nav-item nav-child" data-view="admin"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>Whitelist</button>
+          </div>
+
           <button class="nav-item" data-view="registered"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l1.6-4.3A2 2 0 0 1 8.5 6.2h7a2 2 0 0 1 1.9 1.5L19 12M4 12h16v5h-2v-2H6v2H4z"/><circle cx="7.5" cy="15.5" r="1"/><circle cx="16.5" cy="15.5" r="1"/></svg></span>Registered Vehicle</button>
           <button class="nav-item" data-view="blacklist"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>Black List</button>
           <button class="nav-item" data-view="yard"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17V7h3.5a3 3 0 0 1 0 6H9"/></svg></span>Yard Management</button>
-          <button class="nav-item" data-view="region"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5-6 2v14l6-2 6 2 6-2V5l-6 2zM9 5v14M15 7v14"/></svg></span>Region Management</button>
+
+          <!-- Region Management — expandable group -->
+          <button class="nav-item nav-group" data-group="region-mgmt" aria-expanded="false">
+            <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5-6 2v14l6-2 6 2 6-2V5l-6 2zM9 5v14M15 7v14"/></svg></span>Region Management<span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-sub" data-group-body="region-mgmt">
+            <button class="nav-item nav-child" data-view="region"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2"/></svg></span>Region Management</button>
+            <button class="nav-item nav-child" data-view="type-mgmt"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg></span>Type Management</button>
+          </div>
+
+          <button class="nav-item" data-view="visitors"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6"/></svg></span>Visitor Management</button>
+
+          <!-- System Management — expandable group -->
+          <button class="nav-item nav-group" data-group="system-mgmt" aria-expanded="false">
+            <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.8 19.5l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 14.6a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.5 6.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg></span>System Management<span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-sub" data-group-body="system-mgmt">
+            <button class="nav-item nav-child" data-view="account"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>Account Management</button>
+            <button class="nav-item nav-child" data-view="lcd"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>LCD</button>
+            <button class="nav-item nav-child" data-view="equipment"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></span>Equipment Management</button>
+            <button class="nav-item nav-child" data-view="menu-mgmt"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></span>Menu Management</button>
+            <button class="nav-item nav-child" data-view="role"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/></svg></span>Role Management</button>
+            <button class="nav-item nav-child" data-view="role-perm"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5"/><path d="m11.5 11.5 8 8M16 16l2 2M19 13l2 2"/></svg></span>Role Permission</button>
+            <button class="nav-item nav-child" data-view="dictionary"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v15a1 1 0 0 0 1 1h15M7 4h13v16H7a3 3 0 0 1 0-6h13"/></svg></span>Dictionary Managed</button>
+          </div>
+
+          <!-- System Settings — expandable group -->
+          <button class="nav-item nav-group" data-group="system-settings" aria-expanded="false">
+            <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></span>System Settings<span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-sub" data-group-body="system-settings">
+            <button class="nav-item nav-child" data-view="settings-basic"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg></span>Basic Settings</button>
+            <button class="nav-item nav-child" data-view="settings-entry-exit"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17l5-5-5-5M15 12H3M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/></svg></span>Entry / Exit Settings</button>
+          </div>
           <!-- Entry + Tariffs views still exist (entry-form is used by Dashboard
                GRANTED auto-fill flow) but are no longer reachable from the nav. -->
         </nav>
@@ -1151,6 +1192,129 @@
             </div>
           </section>
         </section>
+
+        <!-- Monthly Membership — live from /api/employees -->
+        <section id="membership" class="view">
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Monthly Membership</h2><p class="hint" style="margin:2px 0 0;" id="mm-meta">Loading…</p></div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="mm-search" placeholder="Search member / plate…" style="margin:0; min-width:200px;">
+                <button class="ghost-button" data-jump="admin" type="button">+ New Member →</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table id="mm-table">
+                <thead><tr><th>Member</th><th>License Plate</th><th>Tag (EPC)</th><th>Department</th>
+                  <th>Plan</th><th>Amount</th><th>Valid Until</th><th>Status</th></tr></thead>
+                <tbody id="mm-body"><tr><td colspan="8" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- Type Management — live from /api/tariffs -->
+        <section id="type-mgmt" class="view">
+          <section class="panel">
+            <div class="panel-head"><h2>Vehicle Type Management</h2><span class="hint" id="tm-meta">Loading…</span></div>
+            <p class="hint" style="margin:0 0 10px;">Vehicle types &amp; their tariff plans. Add or adjust under
+              <a href="#" data-jump="tariffs" class="stub-link">Tariffs</a>.</p>
+            <div class="table-wrap">
+              <table id="tm-table">
+                <thead><tr><th>Vehicle Type</th><th>Tariff Model</th><th>Hourly Rate</th><th>Daily Cap</th><th>Lost Ticket</th></tr></thead>
+                <tbody id="tm-body"><tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- Visitor Management — live CRUD from /api/visitors -->
+        <section id="visitors" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Visitor Pass</h2></div>
+            <form id="vis-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(3,1fr); gap:12px; align-items:end;">
+              <label>Visitor Name *<input type="text" id="vis-name" required placeholder="Ramesh Kumar"></label>
+              <label>License Plate<input type="text" id="vis-plate" placeholder="TS09AB1234" style="text-transform:uppercase;"></label>
+              <label>Contact<input type="tel" id="vis-contact" placeholder="+91 98765 43210"></label>
+              <label>Purpose<input type="text" id="vis-purpose" placeholder="Meeting / Delivery"></label>
+              <label>Host Employee<input type="text" id="vis-host" placeholder="Whom they're visiting"></label>
+              <div><button type="submit" id="vis-submit">+ Add Visitor</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Visitor Passes</h2><span class="hint" id="vis-meta">Loading…</span></div>
+            <div class="table-wrap">
+              <table id="vis-table">
+                <thead><tr><th>Visitor</th><th>Plate</th><th>Contact</th><th>Purpose</th><th>Host</th>
+                  <th>Valid From</th><th>Valid To</th><th>Status</th><th>Action</th></tr></thead>
+                <tbody id="vis-body"><tr><td colspan="9" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- Equipment Management — live from /api/devices -->
+        <section id="equipment" class="view">
+          <section class="panel">
+            <div class="panel-head"><h2>Equipment Management</h2><span class="hint" id="eq-meta">Loading…</span></div>
+            <p class="hint" style="margin:0 0 10px;">Connected hardware reported by the on-site system (readers, cameras, barriers).</p>
+            <div class="table-wrap">
+              <table id="eq-table">
+                <thead><tr><th>Device</th><th>Type</th><th>Status</th><th>Last Seen</th></tr></thead>
+                <tbody id="eq-body"><tr><td colspan="4" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- Basic Settings — live from /api/settings -->
+        <section id="settings-basic" class="view">
+          <section class="panel" style="max-width:640px;">
+            <div class="panel-head"><h2>Basic Settings</h2></div>
+            <form id="sb-form" autocomplete="off" style="display:grid; gap:14px;">
+              <label>Total Parking Capacity<input type="number" id="sb-capacity" min="0" step="1"></label>
+              <label>Default Entry Zone<input type="text" id="sb-zone" placeholder="GMR Cargo Staff Parking"></label>
+              <label>Backup Schedule<input type="text" id="sb-backup" placeholder="Daily at 02:00"></label>
+              <div><button type="submit" id="sb-submit">Save Basic Settings</button></div>
+            </form>
+          </section>
+        </section>
+
+        <!-- Entry/Exit Settings — live from /api/settings (extended keys) -->
+        <section id="settings-entry-exit" class="view">
+          <section class="panel" style="max-width:640px;">
+            <div class="panel-head"><h2>Entry / Exit Settings</h2></div>
+            <form id="se-form" autocomplete="off" style="display:grid; gap:14px;">
+              <label>Entry grace period (minutes)<input type="number" id="se-entry-grace" min="0" step="1" placeholder="5"></label>
+              <label>Exit grace period (minutes)<input type="number" id="se-exit-grace" min="0" step="1" placeholder="10"></label>
+              <label>Auto-open barrier on GRANTED
+                <select id="se-auto-barrier"><option value="1">Yes</option><option value="0">No</option></select>
+              </label>
+              <label>Re-scan cooldown (seconds)<input type="number" id="se-cooldown" min="0" step="1" placeholder="30"></label>
+              <div><button type="submit" id="se-submit">Save Entry/Exit Settings</button></div>
+            </form>
+          </section>
+        </section>
+
+        <!-- System Management placeholders (need dedicated backends — next chunk) -->
+        <section id="account" class="view"><div class="stub-panel panel"><div class="stub-ico">👤</div>
+          <h2>Account Management</h2><p>Operator/admin user accounts with contacts and roles.</p>
+          <p class="stub-note">Real account CRUD (a new <code>accounts</code> table) is the next build chunk.</p></div></section>
+        <section id="lcd" class="view"><div class="stub-panel panel"><div class="stub-ico">🖥️</div>
+          <h2>LCD Display</h2><p>Configure entry/exit LED display messages and screens.</p>
+          <p class="stub-note">LED/LCD display config talks to on-site TCP/IP display hardware — a later-phase integration.</p></div></section>
+        <section id="menu-mgmt" class="view"><div class="stub-panel panel"><div class="stub-ico">📋</div>
+          <h2>Menu Management</h2><p>Configure which sidebar menus each role can see.</p>
+          <p class="stub-note">Menu visibility ties into Role Permission (below) — built together in the RBAC chunk.</p></div></section>
+        <section id="role" class="view"><div class="stub-panel panel"><div class="stub-ico">🛡️</div>
+          <h2>Role Management</h2><p>Define roles (Administrator, Operator, Supervisor, Finance, Security).</p>
+          <p class="stub-note">Real role CRUD (a new <code>roles</code> table) is part of the RBAC chunk.</p></div></section>
+        <section id="role-perm" class="view"><div class="stub-panel panel"><div class="stub-ico">🔑</div>
+          <h2>Role Permission</h2><p>Grant per-role access to each section/action.</p>
+          <p class="stub-note">The permission matrix depends on Role + Menu Management — built together in the RBAC chunk.</p></div></section>
+        <section id="dictionary" class="view"><div class="stub-panel panel"><div class="stub-ico">📖</div>
+          <h2>Dictionary Managed</h2><p>Editable lookup lists (vehicle categories, zones, payment methods).</p>
+          <p class="stub-note">Real dictionary CRUD (a new <code>dictionary</code> table) is the next build chunk.</p></div></section>
 
         <!-- ─── ADMIN ───────────────────────────────────────────────────── -->
         <section id="admin" class="view">
