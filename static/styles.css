@@ -1058,6 +1058,28 @@ td, th, .epc, code, .scan-row dd,
   scrollbar-width: thin;
 }
 
+/* Reusable table paginator (injected by paginate() after each .table-wrap). */
+.tbl-paginator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+}
+.tbl-paginator button {
+  padding: 5px 12px;
+  min-height: 32px;
+  min-width: 38px;
+}
+.tbl-paginator button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.tbl-page-info { padding: 0 10px; color: var(--text); }
+.tbl-page-info b { color: var(--primary); }
+.tbl-page-meta { color: var(--muted); margin-left: 4px; }
+
 /* ──────────────────────────────────────────────────────────────────────
    Consistent alignment for every data table added in the WeParking rebuild
    (dashboard Access History, Order Management, and the Parking/Scanning/

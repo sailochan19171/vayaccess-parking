@@ -1146,9 +1146,9 @@
             </form>
           </section>
           <section class="panel">
-            <div class="panel-head">
-              <h2>Parking Yards</h2>
-              <span class="hint" id="yard-meta">Loading…</span>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Parking Yards</h2><span class="hint" id="yard-meta">Loading…</span></div>
+              <input type="text" id="yard-search" placeholder="Search yard / region…" style="margin:0; min-width:200px;">
             </div>
             <div class="table-wrap">
               <table id="yard-table">
@@ -1176,9 +1176,9 @@
             </form>
           </section>
           <section class="panel">
-            <div class="panel-head">
-              <h2>Regions</h2>
-              <span class="hint" id="region-meta">Loading…</span>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Regions</h2><span class="hint" id="region-meta">Loading…</span></div>
+              <input type="text" id="region-search" placeholder="Search region…" style="margin:0; min-width:200px;">
             </div>
             <div class="table-wrap">
               <table id="region-table">
@@ -1216,7 +1216,10 @@
         <!-- Type Management — live from /api/tariffs -->
         <section id="type-mgmt" class="view">
           <section class="panel">
-            <div class="panel-head"><h2>Vehicle Type Management</h2><span class="hint" id="tm-meta">Loading…</span></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Vehicle Type Management</h2><span class="hint" id="tm-meta">Loading…</span></div>
+              <input type="text" id="tm-search" placeholder="Search type…" style="margin:0; min-width:200px;">
+            </div>
             <p class="hint" style="margin:0 0 10px;">Vehicle types &amp; their tariff plans. Add or adjust under
               <a href="#" data-jump="tariffs" class="stub-link">Tariffs</a>.</p>
             <div class="table-wrap">
@@ -1242,7 +1245,10 @@
             </form>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>Visitor Passes</h2><span class="hint" id="vis-meta">Loading…</span></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Visitor Passes</h2><span class="hint" id="vis-meta">Loading…</span></div>
+              <input type="text" id="vis-search" placeholder="Search visitor / plate / host…" style="margin:0; min-width:220px;">
+            </div>
             <div class="table-wrap">
               <table id="vis-table">
                 <thead><tr><th>Visitor</th><th>Plate</th><th>Contact</th><th>Purpose</th><th>Host</th>
@@ -1256,7 +1262,10 @@
         <!-- Equipment Management — live from /api/devices -->
         <section id="equipment" class="view">
           <section class="panel">
-            <div class="panel-head"><h2>Equipment Management</h2><span class="hint" id="eq-meta">Loading…</span></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Equipment Management</h2><span class="hint" id="eq-meta">Loading…</span></div>
+              <input type="text" id="eq-search" placeholder="Search device / type…" style="margin:0; min-width:200px;">
+            </div>
             <p class="hint" style="margin:0 0 10px;">Connected hardware reported by the on-site system (readers, cameras, barriers).</p>
             <div class="table-wrap">
               <table id="eq-table">
@@ -1312,7 +1321,10 @@
             </form>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>Accounts</h2><span class="hint" id="acc-meta">Loading…</span></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Accounts</h2><span class="hint" id="acc-meta">Loading…</span></div>
+              <input type="text" id="acc-search" placeholder="Search account / role…" style="margin:0; min-width:200px;">
+            </div>
             <div class="table-wrap">
               <table id="acc-table">
                 <thead><tr><th>Account Name</th><th>Nickname</th><th>Contact</th><th>Role</th><th>Created</th><th>Action</th></tr></thead>
@@ -1338,7 +1350,10 @@
             </form>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>Roles</h2><span class="hint" id="rl-meta">Loading…</span></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Roles</h2><span class="hint" id="rl-meta">Loading…</span></div>
+              <input type="text" id="rl-search" placeholder="Search role…" style="margin:0; min-width:200px;">
+            </div>
             <div class="table-wrap">
               <table id="rl-table">
                 <thead><tr><th>Role Name</th><th>Accounts</th><th>Description</th><th>Created</th><th>Action</th></tr></thead>
@@ -1362,7 +1377,10 @@
             </form>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>Dictionary Entries</h2><span class="hint" id="dc-meta">Loading…</span></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Dictionary Entries</h2><span class="hint" id="dc-meta">Loading…</span></div>
+              <input type="text" id="dc-search" placeholder="Search category / key…" style="margin:0; min-width:200px;">
+            </div>
             <div class="table-wrap">
               <table id="dc-table">
                 <thead><tr><th>Category</th><th>Key</th><th>Value</th><th>Created</th><th>Action</th></tr></thead>

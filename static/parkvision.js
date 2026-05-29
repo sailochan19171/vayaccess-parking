@@ -1951,6 +1951,77 @@ function _esc(s) {
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+// ── Reusable client-side paginator ───────────────────────────────────────────
+// Every data table routes its rows through paginate(); the helper slices the
+// rows into pages, renders the current page into the tbody, and injects a
+// First/Prev/Next/Last control directly after the table's .table-wrap.
+// Per-table state (current page) lives in _pager keyed by a unique id.
+const _pager = {};
+const PAGE_SIZE = 10;
+
+function paginate(key, rows, tbodyId, rowFn, colspan, afterRender) {
+  const prevPage = _pager[key] ? _pager[key].page : 1;
+  _pager[key] = { rows, page: prevPage, tbodyId, rowFn, colspan, afterRender };
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  if (_pager[key].page > pages) _pager[key].page = pages;
+  if (_pager[key].page < 1) _pager[key].page = 1;
+  _renderPage(key);
+}
+
+function _renderPage(key) {
+  const s = _pager[key]; if (!s) return;
+  const tb = document.getElementById(s.tbodyId); if (!tb) return;
+  const total = s.rows.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (s.page > pages) s.page = pages;
+  if (s.page < 1) s.page = 1;
+  const start = (s.page - 1) * PAGE_SIZE;
+  const slice = s.rows.slice(start, start + PAGE_SIZE);
+  tb.innerHTML = slice.length
+    ? slice.map(s.rowFn).join('')
+    : _emptyRow(s.colspan, 'No matching rows.');
+  if (s.afterRender) s.afterRender(tb);
+  _renderPaginatorEl(key, s.page, pages, total, start, slice.length);
+}
+
+function _renderPaginatorEl(key, page, pages, total, start, count) {
+  const tb = document.getElementById(_pager[key].tbodyId);
+  const wrap = tb && tb.closest('.table-wrap');
+  if (!wrap) return;
+  let pg = wrap.nextElementSibling;
+  if (!pg || !pg.classList.contains('tbl-paginator')) {
+    pg = document.createElement('div');
+    pg.className = 'tbl-paginator';
+    wrap.parentNode.insertBefore(pg, wrap.nextSibling);
+  }
+  const dF = page <= 1 ? 'disabled' : '';
+  const dL = page >= pages ? 'disabled' : '';
+  const from = total ? start + 1 : 0;
+  pg.innerHTML = `
+    <button class="ghost-button" data-pg="first" ${dF} title="First page">⏮</button>
+    <button class="ghost-button" data-pg="prev"  ${dF} title="Previous page">◀</button>
+    <span class="tbl-page-info">Page <b>${page}</b> of <b>${pages}</b>
+      <span class="tbl-page-meta">· ${from}–${start + count} of ${total}</span></span>
+    <button class="ghost-button" data-pg="next" ${dL} title="Next page">▶</button>
+    <button class="ghost-button" data-pg="last" ${dL} title="Last page">⏭</button>`;
+  pg.querySelectorAll('button[data-pg]').forEach(b => b.addEventListener('click', () => {
+    const s = _pager[key]; if (!s) return;
+    const p = Math.max(1, Math.ceil(s.rows.length / PAGE_SIZE));
+    if (b.dataset.pg === 'first') s.page = 1;
+    else if (b.dataset.pg === 'prev') s.page = Math.max(1, s.page - 1);
+    else if (b.dataset.pg === 'next') s.page = Math.min(p, s.page + 1);
+    else if (b.dataset.pg === 'last') s.page = p;
+    _renderPage(key);
+  }));
+}
+
+// Generic case-insensitive substring filter over a set of fields.
+function _filterRows(rows, query, fields) {
+  const q = (query || '').trim().toUpperCase();
+  if (!q) return rows;
+  return rows.filter(r => fields.some(f => String(r[f] == null ? '' : r[f]).toUpperCase().includes(q)));
+}
+
 async function loadParkingRecords() {
   const tb = $('pr-body'); if (!tb) return;
   try {
@@ -1959,7 +2030,7 @@ async function loadParkingRecords() {
     const q = ($('pr-search')?.value || '').trim().toUpperCase();
     const rows = (Array.isArray(js) ? js : []).filter(t => !q || (t.vehicle || '').toUpperCase().includes(q));
     if ($('pr-meta')) $('pr-meta').textContent = `${rows.length} record(s)`;
-    tb.innerHTML = rows.length ? rows.map(t => `<tr>
+    paginate('pr', rows, 'pr-body', t => `<tr>
       <td style="font-family:monospace;">${_esc(t.vehicle) || '—'}</td>
       <td>${_esc(t.type) || '—'}</td>
       <td>${_fmtTs(t.entryAt)}</td>
@@ -1968,7 +2039,7 @@ async function loadParkingRecords() {
       <td>₹${t.total || 0}</td>
       <td>${_esc(t.payment) || '—'}</td>
       <td>${t.isActive ? '<span class="scan-status-badge scanning">Parked</span>' : '<span class="scan-status-badge granted">Exited</span>'}</td>
-    </tr>`).join('') : _emptyRow(8, 'No parking records yet.');
+    </tr>`, 8);
   } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
 }
 
@@ -1984,7 +2055,7 @@ async function loadScanningRecord() {
     const badge = (st) => /grant/i.test(st) ? '<span class="scan-status-badge granted">Granted</span>'
       : /den/i.test(st) ? '<span class="scan-status-badge denied">Denied</span>'
       : `<span class="scan-status-badge scanning">${_esc(st) || '—'}</span>`;
-    tb.innerHTML = rows.length ? rows.map(l => `<tr>
+    paginate('sr', rows, 'sr-body', l => `<tr>
       <td>${_esc(l.timestamp)}</td>
       <td style="font-family:monospace;">${_esc(l.number_plate) || '—'}</td>
       <td style="font-family:monospace; font-size:0.88em;">${_esc(l.rfid_tag) || '—'}</td>
@@ -1992,7 +2063,7 @@ async function loadScanningRecord() {
       <td>${_esc(l.department) || '—'}</td>
       <td>${_esc(l.vehicle_type) || '—'}</td>
       <td>${badge(l.status)}</td>
-    </tr>`).join('') : _emptyRow(7, 'No scans recorded yet.');
+    </tr>`, 7);
   } catch (e) { tb.innerHTML = _emptyRow(7, 'Failed to load.'); }
 }
 
@@ -2005,7 +2076,7 @@ async function loadRegisteredVehicles() {
     const rows = (Array.isArray(js) ? js : []).filter(e =>
       !q || (e.number_plate || '').toUpperCase().includes(q) || (e.owner_name || '').toUpperCase().includes(q));
     if ($('rv-meta')) $('rv-meta').textContent = `${rows.length} vehicle(s)`;
-    tb.innerHTML = rows.length ? rows.map(e => {
+    paginate('rv', rows, 'rv-body', e => {
       const pay = e.payment_method ? `${_esc(e.payment_method)} ₹${e.payment_amount || 0}` : '—';
       const badge = e.status === 'Active'
         ? '<span class="scan-status-badge granted">Active</span>'
@@ -2021,7 +2092,7 @@ async function loadRegisteredVehicles() {
         <td>${_esc(e.valid_until) || '—'}</td>
         <td>${badge}</td>
       </tr>`;
-    }).join('') : _emptyRow(8, 'No registered vehicles yet.');
+    }, 8);
   } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
 }
 
@@ -2034,13 +2105,13 @@ async function loadBlacklistView() {
     const rows = (Array.isArray(js) ? js : []).filter(b =>
       !q || (b.number_plate || '').toUpperCase().includes(q) || (b.rfid_tag || '').toUpperCase().includes(q));
     if ($('bl-meta')) $('bl-meta').textContent = `${rows.length} banned entr${rows.length === 1 ? 'y' : 'ies'}`;
-    tb.innerHTML = rows.length ? rows.map(b => `<tr>
+    paginate('bl', rows, 'bl-body', b => `<tr>
       <td style="font-family:monospace;">${_esc(b.number_plate) || '—'}</td>
       <td style="font-family:monospace; font-size:0.88em;">${_esc(b.rfid_tag) || '—'}</td>
       <td>${_esc(b.reason) || '—'}</td>
       <td>${_esc(b.added_by) || '—'}</td>
       <td>${_esc(b.created_at) || '—'}</td>
-    </tr>`).join('') : _emptyRow(5, 'No blacklisted plates/tags.');
+    </tr>`, 5);
   } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
 }
 
@@ -2081,7 +2152,7 @@ async function loadOrders() {
       (!ty || o.type === ty) &&
       (!q || (o.order_no || '').toUpperCase().includes(q) || (o.plate || '').toUpperCase().includes(q)));
     if ($('od-meta')) $('od-meta').textContent = `${rows.length} order(s)`;
-    tb.innerHTML = rows.length ? rows.map(o => `<tr>
+    paginate('od', rows, 'od-body', o => `<tr>
       <td style="font-family:monospace; font-size:0.88em;">${_esc(o.order_no)}</td>
       <td>${_esc(o.type)}</td>
       <td style="font-family:monospace;">${_esc(o.plate)}</td>
@@ -2090,7 +2161,7 @@ async function loadOrders() {
       <td>${_esc(o.created_at)}</td>
       <td>${_esc(o.admission)}</td>
       <td><span class="scan-status-badge ${o.status === 'Paid' ? 'granted' : 'scanning'}">${_esc(o.status)}</span></td>
-    </tr>`).join('') : _emptyRow(8, 'No orders yet.');
+    </tr>`, 8);
   } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
 }
 
@@ -2099,9 +2170,9 @@ async function loadYards() {
   try {
     const r = await fetch('/api/yards', { cache: 'no-store' });
     const js = await r.json();
-    const rows = Array.isArray(js) ? js : [];
+    const rows = _filterRows(Array.isArray(js) ? js : [], $('yard-search')?.value, ['name', 'region', 'location']);
     if ($('yard-meta')) $('yard-meta').textContent = `${rows.length} yard(s)`;
-    tb.innerHTML = rows.length ? rows.map(y => `<tr>
+    paginate('yard', rows, 'yard-body', y => `<tr>
       <td><b>${_esc(y.name)}</b></td>
       <td>${y.capacity}</td>
       <td>${y.occupied}</td>
@@ -2110,12 +2181,13 @@ async function loadYards() {
       <td>${_esc(y.region) || '—'}</td>
       <td><button class="ghost-button yard-del" data-id="${y.id}"
              style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
-    </tr>`).join('') : _emptyRow(7, 'No yards yet — add one above.');
-    tb.querySelectorAll('.yard-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('Delete this yard?')) return;
-      await fetch(`/api/yards/${b.dataset.id}`, { method: 'DELETE' });
-      loadYards();
-    }));
+    </tr>`, 7, (tb) => {
+      tb.querySelectorAll('.yard-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this yard?')) return;
+        await fetch(`/api/yards/${b.dataset.id}`, { method: 'DELETE' });
+        loadYards();
+      }));
+    });
   } catch (e) { tb.innerHTML = _emptyRow(7, 'Failed to load.'); }
 }
 
@@ -2124,21 +2196,22 @@ async function loadRegions() {
   try {
     const r = await fetch('/api/regions', { cache: 'no-store' });
     const js = await r.json();
-    const rows = Array.isArray(js) ? js : [];
+    const rows = _filterRows(Array.isArray(js) ? js : [], $('region-search')?.value, ['name', 'description']);
     if ($('region-meta')) $('region-meta').textContent = `${rows.length} region(s)`;
-    tb.innerHTML = rows.length ? rows.map(rg => `<tr>
+    paginate('region', rows, 'region-body', rg => `<tr>
       <td><b>${_esc(rg.name)}</b></td>
       <td>${rg.yard_count}</td>
       <td>${_esc(rg.description) || '—'}</td>
       <td>${_esc(rg.created_at)}</td>
       <td><button class="ghost-button region-del" data-id="${rg.id}"
              style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
-    </tr>`).join('') : _emptyRow(5, 'No regions yet — add one above.');
-    tb.querySelectorAll('.region-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('Delete this region?')) return;
-      await fetch(`/api/regions/${b.dataset.id}`, { method: 'DELETE' });
-      loadRegions();
-    }));
+    </tr>`, 5, (tb) => {
+      tb.querySelectorAll('.region-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this region?')) return;
+        await fetch(`/api/regions/${b.dataset.id}`, { method: 'DELETE' });
+        loadRegions();
+      }));
+    });
     // Keep the Yard form's region dropdown in sync with existing regions.
     const sel = $('yard-region');
     if (sel) {
@@ -2215,7 +2288,7 @@ async function loadMembership() {
     const rows = (Array.isArray(js) ? js : []).filter(e =>
       !q || (e.owner_name || '').toUpperCase().includes(q) || (e.number_plate || '').toUpperCase().includes(q));
     if ($('mm-meta')) $('mm-meta').textContent = `${rows.length} member(s)`;
-    tb.innerHTML = rows.length ? rows.map(e => {
+    paginate('mm', rows, 'mm-body', e => {
       const plan = e.activation_months ? `${e.activation_months} month${e.activation_months > 1 ? 's' : ''}` : '—';
       const badge = e.status === 'Active'
         ? '<span class="scan-status-badge granted">Active</span>'
@@ -2230,7 +2303,7 @@ async function loadMembership() {
         <td>${_esc(e.valid_until) || '—'}</td>
         <td>${badge}</td>
       </tr>`;
-    }).join('') : _emptyRow(8, 'No members yet.');
+    }, 8);
   } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
 }
 
@@ -2239,15 +2312,15 @@ async function loadTypes() {
   try {
     const r = await fetch('/api/tariffs', { cache: 'no-store' });
     const js = await r.json();
-    const rows = Array.isArray(js) ? js : [];
+    const rows = _filterRows(Array.isArray(js) ? js : [], $('tm-search')?.value, ['type', 'model']);
     if ($('tm-meta')) $('tm-meta').textContent = `${rows.length} type(s)`;
-    tb.innerHTML = rows.length ? rows.map(t => `<tr>
+    paginate('tm', rows, 'tm-body', t => `<tr>
       <td><b>${_esc(t.type)}</b></td>
       <td>${_esc(t.model) || '—'}</td>
       <td>₹${t.rate || 0}/hr</td>
       <td>₹${t.dailyCap || 0}</td>
       <td>₹${t.lost || 0}</td>
-    </tr>`).join('') : _emptyRow(5, 'No vehicle types defined.');
+    </tr>`, 5);
   } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
 }
 
@@ -2256,9 +2329,10 @@ async function loadVisitorsView() {
   try {
     const r = await fetch('/api/visitors', { cache: 'no-store' });
     const js = await r.json();
-    const rows = Array.isArray(js) ? js : [];
+    const rows = _filterRows(Array.isArray(js) ? js : [], $('vis-search')?.value,
+      ['name', 'number_plate', 'contact', 'purpose', 'host_employee']);
     if ($('vis-meta')) $('vis-meta').textContent = `${rows.length} visitor(s)`;
-    tb.innerHTML = rows.length ? rows.map(v => {
+    paginate('vis', rows, 'vis-body', v => {
       const st = (v.status || '').toLowerCase();
       const badge = st.includes('active') ? 'granted' : st.includes('expir') ? 'denied' : 'scanning';
       return `<tr>
@@ -2273,12 +2347,13 @@ async function loadVisitorsView() {
         <td><button class="ghost-button vis-del" data-id="${v.id}"
                style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
       </tr>`;
-    }).join('') : _emptyRow(9, 'No visitor passes yet — add one above.');
-    tb.querySelectorAll('.vis-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('Delete this visitor pass?')) return;
-      await fetch(`/api/visitors/${b.dataset.id}`, { method: 'DELETE' });
-      loadVisitorsView();
-    }));
+    }, 9, (tb) => {
+      tb.querySelectorAll('.vis-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this visitor pass?')) return;
+        await fetch(`/api/visitors/${b.dataset.id}`, { method: 'DELETE' });
+        loadVisitorsView();
+      }));
+    });
   } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
 }
 
@@ -2308,17 +2383,17 @@ async function loadEquipment() {
   try {
     const r = await fetch('/api/devices', { cache: 'no-store' });
     const js = await r.json();
-    const rows = Array.isArray(js) ? js : [];
+    const rows = _filterRows(Array.isArray(js) ? js : [], $('eq-search')?.value, ['name', 'type', 'status']);
     if ($('eq-meta')) $('eq-meta').textContent = `${rows.length} device(s)`;
     const badge = (s) => /online|connected|ready|streaming/i.test(s)
       ? `<span class="scan-status-badge granted">${_esc(s)}</span>`
       : `<span class="scan-status-badge denied">${_esc(s)}</span>`;
-    tb.innerHTML = rows.length ? rows.map(d => `<tr>
+    paginate('eq', rows, 'eq-body', d => `<tr>
       <td><b>${_esc(d.name)}</b></td>
       <td>${_esc(d.type)}</td>
       <td>${badge(d.status)}</td>
       <td>${_esc(d.lastSeen) || '—'}</td>
-    </tr>`).join('') : _emptyRow(4, 'No devices reported.');
+    </tr>`, 4);
   } catch (e) { tb.innerHTML = _emptyRow(4, 'Failed to load.'); }
 }
 
@@ -2384,45 +2459,50 @@ $('vis-search')?.addEventListener('input', loadVisitorsView);
 async function loadAccounts() {
   const tb = $('acc-body'); if (!tb) return;
   try {
-    const rows = await (await fetch('/api/accounts', { cache: 'no-store' })).json();
+    const raw = await (await fetch('/api/accounts', { cache: 'no-store' })).json();
+    const rows = _filterRows(Array.isArray(raw) ? raw : [], $('acc-search')?.value, ['name', 'nickname', 'contact', 'role']);
     if ($('acc-meta')) $('acc-meta').textContent = `${rows.length} account(s)`;
-    tb.innerHTML = rows.length ? rows.map(a => `<tr>
+    paginate('acc', rows, 'acc-body', a => `<tr>
       <td><b>${_esc(a.name)}</b></td>
       <td>${_esc(a.nickname) || '—'}</td>
       <td>${_esc(a.contact) || '—'}</td>
       <td>${_esc(a.role) || '—'}</td>
       <td>${_esc(a.created_at)}</td>
       <td><button class="ghost-button acc-del" data-id="${a.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
-    </tr>`).join('') : _emptyRow(6, 'No accounts yet — add one above.');
-    tb.querySelectorAll('.acc-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('Delete this account?')) return;
-      await fetch(`/api/accounts/${b.dataset.id}`, { method: 'DELETE' }); loadAccounts();
-    }));
+    </tr>`, 6, (tb) => {
+      tb.querySelectorAll('.acc-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this account?')) return;
+        await fetch(`/api/accounts/${b.dataset.id}`, { method: 'DELETE' }); loadAccounts();
+      }));
+    });
   } catch (e) { tb.innerHTML = _emptyRow(6, 'Failed to load.'); }
 }
 
 async function loadRolesView() {
   const tb = $('rl-body'); if (!tb) return;
   try {
-    const rows = await (await fetch('/api/roles', { cache: 'no-store' })).json();
+    const all = await (await fetch('/api/roles', { cache: 'no-store' })).json();
+    const allRoles = Array.isArray(all) ? all : [];
+    const rows = _filterRows(allRoles, $('rl-search')?.value, ['name', 'description']);
     if ($('rl-meta')) $('rl-meta').textContent = `${rows.length} role(s)`;
-    tb.innerHTML = rows.length ? rows.map(r => `<tr>
+    paginate('rl', rows, 'rl-body', r => `<tr>
       <td><b>${_esc(r.name)}</b></td>
       <td>${r.account_count}</td>
       <td>${_esc(r.description) || '—'}</td>
       <td>${_esc(r.created_at)}</td>
       <td><button class="ghost-button rl-del" data-id="${r.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
-    </tr>`).join('') : _emptyRow(5, 'No roles yet — add one above.');
-    tb.querySelectorAll('.rl-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('Delete this role?')) return;
-      await fetch(`/api/roles/${b.dataset.id}`, { method: 'DELETE' }); loadRolesView();
-    }));
+    </tr>`, 5, (tb) => {
+      tb.querySelectorAll('.rl-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this role?')) return;
+        await fetch(`/api/roles/${b.dataset.id}`, { method: 'DELETE' }); loadRolesView();
+      }));
+    });
     // Feed the Account form's role dropdown.
     const sel = $('acc-role');
     if (sel) {
       const cur = sel.value;
       sel.innerHTML = '<option value="">— none —</option>' +
-        rows.map(r => `<option value="${_esc(r.name)}">${_esc(r.name)}</option>`).join('');
+        allRoles.map(r => `<option value="${_esc(r.name)}">${_esc(r.name)}</option>`).join('');
       sel.value = cur;
     }
   } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
@@ -2431,19 +2511,21 @@ async function loadRolesView() {
 async function loadDictionary() {
   const tb = $('dc-body'); if (!tb) return;
   try {
-    const rows = await (await fetch('/api/dictionary', { cache: 'no-store' })).json();
+    const raw = await (await fetch('/api/dictionary', { cache: 'no-store' })).json();
+    const rows = _filterRows(Array.isArray(raw) ? raw : [], $('dc-search')?.value, ['category', 'key', 'value']);
     if ($('dc-meta')) $('dc-meta').textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}`;
-    tb.innerHTML = rows.length ? rows.map(d => `<tr>
+    paginate('dc', rows, 'dc-body', d => `<tr>
       <td><b>${_esc(d.category)}</b></td>
       <td>${_esc(d.key)}</td>
       <td>${_esc(d.value) || '—'}</td>
       <td>${_esc(d.created_at)}</td>
       <td><button class="ghost-button dc-del" data-id="${d.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
-    </tr>`).join('') : _emptyRow(5, 'No dictionary entries yet — add one above.');
-    tb.querySelectorAll('.dc-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('Delete this entry?')) return;
-      await fetch(`/api/dictionary/${b.dataset.id}`, { method: 'DELETE' }); loadDictionary();
-    }));
+    </tr>`, 5, (tb) => {
+      tb.querySelectorAll('.dc-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this entry?')) return;
+        await fetch(`/api/dictionary/${b.dataset.id}`, { method: 'DELETE' }); loadDictionary();
+      }));
+    });
   } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
 }
 
@@ -2482,3 +2564,12 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
     btn.addEventListener('click', () => setTimeout(_liveLoaders[v], 30));
   }
 });
+
+// Filter inputs for the CRUD/list tables that previously lacked one.
+$('tm-search')?.addEventListener('input', loadTypes);
+$('eq-search')?.addEventListener('input', loadEquipment);
+$('yard-search')?.addEventListener('input', loadYards);
+$('region-search')?.addEventListener('input', loadRegions);
+$('acc-search')?.addEventListener('input', loadAccounts);
+$('rl-search')?.addEventListener('input', loadRolesView);
+$('dc-search')?.addEventListener('input', loadDictionary);
