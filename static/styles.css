@@ -107,6 +107,11 @@ nav {
 }
 
 .nav-item {
+  /* display:flex is what makes the icon + label + right-aligned caret line up
+     and lets margin-left:auto push the caret to the right edge. Without it the
+     whole row renders inline and looks misaligned. */
+  display: flex;
+  align-items: center;
   width: 100%;
   justify-content: flex-start;
   padding: 0 14px;
@@ -188,7 +193,9 @@ nav {
 }
 
 .nav-sub.open {
-  max-height: 240px;
+  /* Large enough for the biggest submenu (System Management = 7 items).
+     240px clipped it; 520px fits all of them with room to spare. */
+  max-height: 520px;
   margin-top: 8px;
 }
 
