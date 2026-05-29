@@ -1038,3 +1038,37 @@ td, th, .epc, code, .scan-row dd,
   overflow-x: auto;
   scrollbar-width: thin;
 }
+
+/* ──────────────────────────────────────────────────────────────────────
+   Consistent alignment for every data table added in the WeParking rebuild
+   (dashboard Access History, Order Management, and the Parking/Scanning/
+   Registered/Black-List/Yard/Region tables). The ragged-header problem comes
+   from cells wrapping to two lines while headers stay on one — nowrap keeps
+   both on a single line so columns line up, and a min-width makes the
+   .table-wrap scroll horizontally instead of crushing the columns.
+   ────────────────────────────────────────────────────────────────────── */
+#access-log-table, #od-table, #pr-table, #sr-table, #rv-table,
+#bl-table, #yard-table, #region-table {
+  min-width: 760px;
+}
+/* The 8-column tables need more room before scrolling. */
+#od-table, #pr-table, #rv-table { min-width: 960px; }
+
+#access-log-table th, #access-log-table td,
+#od-table th, #od-table td,
+#pr-table th, #pr-table td,
+#sr-table th, #sr-table td,
+#rv-table th, #rv-table td,
+#bl-table th, #bl-table td,
+#yard-table th, #yard-table td,
+#region-table th, #region-table td {
+  white-space: nowrap;
+  vertical-align: middle;
+  padding: 12px 16px;
+}
+
+#access-log-table th, #od-table th, #pr-table th, #sr-table th,
+#rv-table th, #bl-table th, #yard-table th, #region-table th {
+  background: #f8fafc;
+  text-align: left;
+}
