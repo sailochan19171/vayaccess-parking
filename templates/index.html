@@ -941,28 +941,60 @@
           </div>
         </section>
 
-        <!-- Parking Records (Parking Inquiry) -->
+        <!-- Parking Records (Parking Inquiry) — live from /api/transactions -->
         <section id="parking-records" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">🔍</div>
-            <h2>Parking Records</h2>
-            <p>Searchable history of every vehicle entry/exit with dwell time,
-              charge, and payment status.</p>
-            <p class="stub-note">This data is live now under
-              <a href="#" data-jump="reports" class="stub-link">Statistical Management → Detailed View</a>.
-              A dedicated search-and-filter records page is a later phase.</p>
-          </div>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Parking Records</h2>
+                <p class="hint" style="margin:2px 0 0;" id="pr-meta">Loading…</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="pr-search" placeholder="Search license plate…"
+                       style="margin:0; min-width:200px;">
+                <button class="ghost-button" id="pr-refresh" type="button">↻ Refresh</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table id="pr-table">
+                <thead>
+                  <tr><th>License Plate</th><th>Type</th><th>Entry Time</th><th>Exit Time</th>
+                    <th>Dwell</th><th>Amount</th><th>Payment</th><th>Status</th></tr>
+                </thead>
+                <tbody id="pr-body">
+                  <tr><td colspan="8" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
-        <!-- Scanning Record (Parking Inquiry) -->
+        <!-- Scanning Record (Parking Inquiry) — live from /api/logs -->
         <section id="scanning-record" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">📡</div>
-            <h2>Scanning Record</h2>
-            <p>Every ANPR / UHF scan at the gate, by device and timestamp.</p>
-            <p class="stub-note">This data is live now under
-              <a href="#" data-jump="reports" class="stub-link">Statistical Management → Gate Access Events</a>.</p>
-          </div>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Scanning Record</h2>
+                <p class="hint" style="margin:2px 0 0;" id="sr-meta">Loading…</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="sr-search" placeholder="Search plate / tag…"
+                       style="margin:0; min-width:200px;">
+                <button class="ghost-button" id="sr-refresh" type="button">↻ Refresh</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table id="sr-table">
+                <thead>
+                  <tr><th>Scan Time</th><th>License Plate</th><th>Tag (EPC)</th><th>Owner</th>
+                    <th>Department</th><th>Type</th><th>Status</th></tr>
+                </thead>
+                <tbody id="sr-body">
+                  <tr><td colspan="7" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
         <!-- Order Management -->
@@ -979,31 +1011,61 @@
           </div>
         </section>
 
-        <!-- Registered Vehicle -->
+        <!-- Registered Vehicle — live from /api/employees -->
         <section id="registered" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">🚗</div>
-            <h2>Registered Vehicle</h2>
-            <p>All vehicles registered to employees/members with their tag, plate,
-              and validity.</p>
-            <p class="stub-note">Registered vehicles are managed today under
-              <a href="#" data-jump="admin" class="stub-link">Member Management</a>
-              (the Activated Employees table). A standalone vehicle registry is a
-              later phase.</p>
-          </div>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Registered Vehicle</h2>
+                <p class="hint" style="margin:2px 0 0;" id="rv-meta">Loading…</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="rv-search" placeholder="Search plate / owner…"
+                       style="margin:0; min-width:200px;">
+                <button class="ghost-button" data-jump="admin" type="button">+ Register New →</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table id="rv-table">
+                <thead>
+                  <tr><th>Owner</th><th>License Plate</th><th>Tag (EPC)</th><th>Type</th>
+                    <th>Department</th><th>Payment</th><th>Valid Until</th><th>Status</th></tr>
+                </thead>
+                <tbody id="rv-body">
+                  <tr><td colspan="8" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
-        <!-- Black List -->
+        <!-- Black List — live from /api/blacklist -->
         <section id="blacklist" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">⛔</div>
-            <h2>Black List</h2>
-            <p>Plates/tags that are always denied at the gate, regardless of
-              whitelist status.</p>
-            <p class="stub-note">The blacklist is live now inside
-              <a href="#" data-jump="admin" class="stub-link">Member Management → Blacklist</a>.
-              It will move to this dedicated section in a later phase.</p>
-          </div>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Black List</h2>
+                <p class="hint" style="margin:2px 0 0;" id="bl-meta">Loading…</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="bl-search" placeholder="Search plate / tag…"
+                       style="margin:0; min-width:200px;">
+                <button class="ghost-button" data-jump="admin" type="button">+ Manage in Member Mgmt →</button>
+              </div>
+            </div>
+            <p class="hint" style="margin:0 0 10px;">Plates/tags here are always denied at the gate,
+              even if they're also whitelisted.</p>
+            <div class="table-wrap">
+              <table id="bl-table">
+                <thead>
+                  <tr><th>License Plate</th><th>Tag (EPC)</th><th>Reason</th><th>Added By</th><th>Added On</th></tr>
+                </thead>
+                <tbody id="bl-body">
+                  <tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
         <!-- Yard Management -->

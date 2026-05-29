@@ -1919,3 +1919,146 @@ setInterval(loadUhfHourly, 20000);
     b.addEventListener('click', () => setOpen(false))
   );
 })();
+
+// ── Phase 2: live data sections ───────────────────────────────────────────────
+// Parking Records / Scanning Record / Registered Vehicle / Black List each fetch
+// an existing API and render an auto-refreshing table. The 4 sections that still
+// need new backends (Video, Order, Yard, Region) remain stub panels.
+function _fmtTs(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function _dwell(a, b) {
+  if (!a) return '—';
+  const end = b || Date.now();
+  let s = Math.max(0, Math.floor((end - a) / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+function _emptyRow(cols, msg) {
+  return `<tr><td colspan="${cols}" style="text-align:center; opacity:0.6; padding:20px;">${msg}</td></tr>`;
+}
+function _esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+async function loadParkingRecords() {
+  const tb = $('pr-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/transactions?limit=500', { cache: 'no-store' });
+    const js = await r.json();
+    const q = ($('pr-search')?.value || '').trim().toUpperCase();
+    const rows = (Array.isArray(js) ? js : []).filter(t => !q || (t.vehicle || '').toUpperCase().includes(q));
+    if ($('pr-meta')) $('pr-meta').textContent = `${rows.length} record(s)`;
+    tb.innerHTML = rows.length ? rows.map(t => `<tr>
+      <td style="font-family:monospace;">${_esc(t.vehicle) || '—'}</td>
+      <td>${_esc(t.type) || '—'}</td>
+      <td>${_fmtTs(t.entryAt)}</td>
+      <td>${_fmtTs(t.exitAt)}</td>
+      <td>${_dwell(t.entryAt, t.exitAt)}</td>
+      <td>₹${t.total || 0}</td>
+      <td>${_esc(t.payment) || '—'}</td>
+      <td>${t.isActive ? '<span class="scan-status-badge scanning">Parked</span>' : '<span class="scan-status-badge granted">Exited</span>'}</td>
+    </tr>`).join('') : _emptyRow(8, 'No parking records yet.');
+  } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
+}
+
+async function loadScanningRecord() {
+  const tb = $('sr-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/logs?limit=500', { cache: 'no-store' });
+    const js = await r.json();
+    const q = ($('sr-search')?.value || '').trim().toUpperCase();
+    const rows = (Array.isArray(js) ? js : []).filter(l =>
+      !q || (l.number_plate || '').toUpperCase().includes(q) || (l.rfid_tag || '').toUpperCase().includes(q));
+    if ($('sr-meta')) $('sr-meta').textContent = `${rows.length} scan(s)`;
+    const badge = (st) => /grant/i.test(st) ? '<span class="scan-status-badge granted">Granted</span>'
+      : /den/i.test(st) ? '<span class="scan-status-badge denied">Denied</span>'
+      : `<span class="scan-status-badge scanning">${_esc(st) || '—'}</span>`;
+    tb.innerHTML = rows.length ? rows.map(l => `<tr>
+      <td>${_esc(l.timestamp)}</td>
+      <td style="font-family:monospace;">${_esc(l.number_plate) || '—'}</td>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(l.rfid_tag) || '—'}</td>
+      <td>${_esc(l.owner_name) || '—'}</td>
+      <td>${_esc(l.department) || '—'}</td>
+      <td>${_esc(l.vehicle_type) || '—'}</td>
+      <td>${badge(l.status)}</td>
+    </tr>`).join('') : _emptyRow(7, 'No scans recorded yet.');
+  } catch (e) { tb.innerHTML = _emptyRow(7, 'Failed to load.'); }
+}
+
+async function loadRegisteredVehicles() {
+  const tb = $('rv-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/employees', { cache: 'no-store' });
+    const js = await r.json();
+    const q = ($('rv-search')?.value || '').trim().toUpperCase();
+    const rows = (Array.isArray(js) ? js : []).filter(e =>
+      !q || (e.number_plate || '').toUpperCase().includes(q) || (e.owner_name || '').toUpperCase().includes(q));
+    if ($('rv-meta')) $('rv-meta').textContent = `${rows.length} vehicle(s)`;
+    tb.innerHTML = rows.length ? rows.map(e => {
+      const pay = e.payment_method ? `${_esc(e.payment_method)} ₹${e.payment_amount || 0}` : '—';
+      const badge = e.status === 'Active'
+        ? '<span class="scan-status-badge granted">Active</span>'
+        : '<span class="scan-status-badge denied">Expired</span>';
+      const plate = (e.number_plate || '').startsWith('EMP-') ? '<i style="opacity:0.5;">(none)</i>' : (_esc(e.number_plate) || '—');
+      return `<tr>
+        <td>${_esc(e.owner_name) || '—'}</td>
+        <td style="font-family:monospace;">${plate}</td>
+        <td style="font-family:monospace; font-size:0.88em;">${_esc(e.rfid_tag) || '—'}</td>
+        <td>${_esc(e.vehicle_type) || '—'}</td>
+        <td>${_esc(e.department) || '—'}</td>
+        <td>${pay}</td>
+        <td>${_esc(e.valid_until) || '—'}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('') : _emptyRow(8, 'No registered vehicles yet.');
+  } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
+}
+
+async function loadBlacklistView() {
+  const tb = $('bl-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/blacklist', { cache: 'no-store' });
+    const js = await r.json();
+    const q = ($('bl-search')?.value || '').trim().toUpperCase();
+    const rows = (Array.isArray(js) ? js : []).filter(b =>
+      !q || (b.number_plate || '').toUpperCase().includes(q) || (b.rfid_tag || '').toUpperCase().includes(q));
+    if ($('bl-meta')) $('bl-meta').textContent = `${rows.length} banned entr${rows.length === 1 ? 'y' : 'ies'}`;
+    tb.innerHTML = rows.length ? rows.map(b => `<tr>
+      <td style="font-family:monospace;">${_esc(b.number_plate) || '—'}</td>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(b.rfid_tag) || '—'}</td>
+      <td>${_esc(b.reason) || '—'}</td>
+      <td>${_esc(b.added_by) || '—'}</td>
+      <td>${_esc(b.created_at) || '—'}</td>
+    </tr>`).join('') : _emptyRow(5, 'No blacklisted plates/tags.');
+  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+}
+
+// Wire loaders: load when the section is opened, on search input, and on refresh.
+const _liveLoaders = {
+  'parking-records': loadParkingRecords,
+  'scanning-record': loadScanningRecord,
+  'registered':      loadRegisteredVehicles,
+  'blacklist':       loadBlacklistView,
+};
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  const v = btn.dataset.view || btn.dataset.jump;
+  if (v && _liveLoaders[v]) btn.addEventListener('click', () => setTimeout(_liveLoaders[v], 30));
+});
+$('pr-search')?.addEventListener('input', loadParkingRecords);
+$('pr-refresh')?.addEventListener('click', loadParkingRecords);
+$('sr-search')?.addEventListener('input', loadScanningRecord);
+$('sr-refresh')?.addEventListener('click', loadScanningRecord);
+$('rv-search')?.addEventListener('input', loadRegisteredVehicles);
+$('bl-search')?.addEventListener('input', loadBlacklistView);
+
+// Real-time: every 5s, refresh whichever live section is currently visible.
+setInterval(() => {
+  for (const [view, fn] of Object.entries(_liveLoaders)) {
+    if (document.getElementById(view)?.classList.contains('active')) fn();
+  }
+}, 5000);
