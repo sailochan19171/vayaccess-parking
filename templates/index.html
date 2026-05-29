@@ -1297,24 +1297,80 @@
         </section>
 
         <!-- System Management placeholders (need dedicated backends — next chunk) -->
-        <section id="account" class="view"><div class="stub-panel panel"><div class="stub-ico">👤</div>
-          <h2>Account Management</h2><p>Operator/admin user accounts with contacts and roles.</p>
-          <p class="stub-note">Real account CRUD (a new <code>accounts</code> table) is the next build chunk.</p></div></section>
+        <!-- Account Management — live CRUD from /api/accounts -->
+        <section id="account" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Account</h2></div>
+            <form id="acc-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(4,1fr); gap:12px; align-items:end;">
+              <label>Account Name *<input type="text" id="acc-name" required placeholder="security"></label>
+              <label>Nickname<input type="text" id="acc-nick" placeholder="Sec"></label>
+              <label>Contact<input type="text" id="acc-contact" placeholder="9876543210"></label>
+              <label>Role
+                <select id="acc-role"><option value="">— none —</option></select>
+              </label>
+              <div style="grid-column:1/-1;"><button type="submit" id="acc-submit">+ Add Account</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Accounts</h2><span class="hint" id="acc-meta">Loading…</span></div>
+            <div class="table-wrap">
+              <table id="acc-table">
+                <thead><tr><th>Account Name</th><th>Nickname</th><th>Contact</th><th>Role</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="acc-body"><tr><td colspan="6" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
         <section id="lcd" class="view"><div class="stub-panel panel"><div class="stub-ico">🖥️</div>
           <h2>LCD Display</h2><p>Configure entry/exit LED display messages and screens.</p>
           <p class="stub-note">LED/LCD display config talks to on-site TCP/IP display hardware — a later-phase integration.</p></div></section>
         <section id="menu-mgmt" class="view"><div class="stub-panel panel"><div class="stub-ico">📋</div>
           <h2>Menu Management</h2><p>Configure which sidebar menus each role can see.</p>
           <p class="stub-note">Menu visibility ties into Role Permission (below) — built together in the RBAC chunk.</p></div></section>
-        <section id="role" class="view"><div class="stub-panel panel"><div class="stub-ico">🛡️</div>
-          <h2>Role Management</h2><p>Define roles (Administrator, Operator, Supervisor, Finance, Security).</p>
-          <p class="stub-note">Real role CRUD (a new <code>roles</code> table) is part of the RBAC chunk.</p></div></section>
+        <!-- Role Management — live CRUD from /api/roles -->
+        <section id="role" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Role</h2></div>
+            <form id="role-mgmt-form" autocomplete="off" style="display:grid; grid-template-columns: 1fr 2fr auto; gap:12px; align-items:end;">
+              <label>Role Name *<input type="text" id="rl-name" required placeholder="Supervisor"></label>
+              <label>Description<input type="text" id="rl-desc" placeholder="Shift oversight + approvals"></label>
+              <div><button type="submit" id="rl-submit">+ Add Role</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Roles</h2><span class="hint" id="rl-meta">Loading…</span></div>
+            <div class="table-wrap">
+              <table id="rl-table">
+                <thead><tr><th>Role Name</th><th>Accounts</th><th>Description</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="rl-body"><tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
         <section id="role-perm" class="view"><div class="stub-panel panel"><div class="stub-ico">🔑</div>
           <h2>Role Permission</h2><p>Grant per-role access to each section/action.</p>
           <p class="stub-note">The permission matrix depends on Role + Menu Management — built together in the RBAC chunk.</p></div></section>
-        <section id="dictionary" class="view"><div class="stub-panel panel"><div class="stub-ico">📖</div>
-          <h2>Dictionary Managed</h2><p>Editable lookup lists (vehicle categories, zones, payment methods).</p>
-          <p class="stub-note">Real dictionary CRUD (a new <code>dictionary</code> table) is the next build chunk.</p></div></section>
+        <!-- Dictionary Managed — live CRUD from /api/dictionary -->
+        <section id="dictionary" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Dictionary Entry</h2></div>
+            <form id="dict-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(3,1fr); gap:12px; align-items:end;">
+              <label>Category *<input type="text" id="dc-cat" required placeholder="Vehicle Category"></label>
+              <label>Key *<input type="text" id="dc-key" required placeholder="Four-Wheeler"></label>
+              <label>Value<input type="text" id="dc-val" placeholder="Car / Truck / Bus / EV"></label>
+              <div style="grid-column:1/-1;"><button type="submit" id="dc-submit">+ Add Entry</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Dictionary Entries</h2><span class="hint" id="dc-meta">Loading…</span></div>
+            <div class="table-wrap">
+              <table id="dc-table">
+                <thead><tr><th>Category</th><th>Key</th><th>Value</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="dc-body"><tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
 
         <!-- ─── ADMIN ───────────────────────────────────────────────────── -->
         <section id="admin" class="view">

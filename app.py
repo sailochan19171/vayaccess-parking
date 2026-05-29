@@ -16,7 +16,7 @@ if not CLOUD_MODE:
 from flask import Flask, render_template, request, jsonify, Response
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
-                      migrate_schema)
+                      Account, Role, DictionaryEntry, migrate_schema)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -2627,6 +2627,93 @@ def api_regions_delete(rid):
     db.session.delete(row)
     db.session.commit()
     AuditEvent.log(f"Region removed: {name}", area='Admin')
+    return jsonify({"status": "ok"})
+
+
+# ── System Management: Accounts ──────────────────────────────────────────────
+@app.route('/api/accounts', methods=['GET', 'POST'])
+def api_accounts():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Account name is required"}), 400
+        if Account.query.filter(db.func.lower(Account.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Account '{name}' already exists"}), 400
+        db.session.add(Account(name=name,
+                               nickname=(data.get('nickname') or '').strip() or None,
+                               contact=(data.get('contact') or '').strip() or None,
+                               role=(data.get('role') or '').strip() or None))
+        db.session.commit()
+        AuditEvent.log(f"Account added: {name}", area='System')
+        return jsonify({"status": "ok"})
+    return jsonify([a.to_dict() for a in Account.query.order_by(Account.name).all()])
+
+
+@app.route('/api/accounts/<int:aid>', methods=['DELETE'])
+def api_accounts_delete(aid):
+    row = Account.query.get(aid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    db.session.delete(row); db.session.commit()
+    AuditEvent.log(f"Account removed: {row.name}", area='System')
+    return jsonify({"status": "ok"})
+
+
+# ── System Management: Roles ─────────────────────────────────────────────────
+@app.route('/api/roles', methods=['GET', 'POST'])
+def api_roles():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Role name is required"}), 400
+        if Role.query.filter(db.func.lower(Role.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Role '{name}' already exists"}), 400
+        db.session.add(Role(name=name,
+                            description=(data.get('description') or '').strip() or None))
+        db.session.commit()
+        AuditEvent.log(f"Role added: {name}", area='System')
+        return jsonify({"status": "ok"})
+    return jsonify([r.to_dict() for r in Role.query.order_by(Role.name).all()])
+
+
+@app.route('/api/roles/<int:rid>', methods=['DELETE'])
+def api_roles_delete(rid):
+    row = Role.query.get(rid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    db.session.delete(row); db.session.commit()
+    AuditEvent.log(f"Role removed: {row.name}", area='System')
+    return jsonify({"status": "ok"})
+
+
+# ── System Management: Dictionary ────────────────────────────────────────────
+@app.route('/api/dictionary', methods=['GET', 'POST'])
+def api_dictionary():
+    if request.method == 'POST':
+        data = request.json or {}
+        category = (data.get('category') or '').strip()
+        key      = (data.get('key') or '').strip()
+        if not category or not key:
+            return jsonify({"status": "error", "message": "Category and key are required"}), 400
+        db.session.add(DictionaryEntry(category=category, dict_key=key,
+                                       dict_value=(data.get('value') or '').strip() or None))
+        db.session.commit()
+        AuditEvent.log(f"Dictionary entry added: {category}/{key}", area='System')
+        return jsonify({"status": "ok"})
+    return jsonify([d.to_dict()
+                    for d in DictionaryEntry.query.order_by(
+                        DictionaryEntry.category, DictionaryEntry.dict_key).all()])
+
+
+@app.route('/api/dictionary/<int:did>', methods=['DELETE'])
+def api_dictionary_delete(did):
+    row = DictionaryEntry.query.get(did)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    db.session.delete(row); db.session.commit()
+    AuditEvent.log(f"Dictionary entry removed: {row.category}/{row.dict_key}", area='System')
     return jsonify({"status": "ok"})
 
 

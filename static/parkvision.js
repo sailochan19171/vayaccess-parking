@@ -2379,3 +2379,106 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
 });
 $('mm-search')?.addEventListener('input', loadMembership);
 $('vis-search')?.addEventListener('input', loadVisitorsView);
+
+// ── Phase 5: System Management CRUD (Accounts / Roles / Dictionary) ──────────
+async function loadAccounts() {
+  const tb = $('acc-body'); if (!tb) return;
+  try {
+    const rows = await (await fetch('/api/accounts', { cache: 'no-store' })).json();
+    if ($('acc-meta')) $('acc-meta').textContent = `${rows.length} account(s)`;
+    tb.innerHTML = rows.length ? rows.map(a => `<tr>
+      <td><b>${_esc(a.name)}</b></td>
+      <td>${_esc(a.nickname) || '—'}</td>
+      <td>${_esc(a.contact) || '—'}</td>
+      <td>${_esc(a.role) || '—'}</td>
+      <td>${_esc(a.created_at)}</td>
+      <td><button class="ghost-button acc-del" data-id="${a.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`).join('') : _emptyRow(6, 'No accounts yet — add one above.');
+    tb.querySelectorAll('.acc-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this account?')) return;
+      await fetch(`/api/accounts/${b.dataset.id}`, { method: 'DELETE' }); loadAccounts();
+    }));
+  } catch (e) { tb.innerHTML = _emptyRow(6, 'Failed to load.'); }
+}
+
+async function loadRolesView() {
+  const tb = $('rl-body'); if (!tb) return;
+  try {
+    const rows = await (await fetch('/api/roles', { cache: 'no-store' })).json();
+    if ($('rl-meta')) $('rl-meta').textContent = `${rows.length} role(s)`;
+    tb.innerHTML = rows.length ? rows.map(r => `<tr>
+      <td><b>${_esc(r.name)}</b></td>
+      <td>${r.account_count}</td>
+      <td>${_esc(r.description) || '—'}</td>
+      <td>${_esc(r.created_at)}</td>
+      <td><button class="ghost-button rl-del" data-id="${r.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`).join('') : _emptyRow(5, 'No roles yet — add one above.');
+    tb.querySelectorAll('.rl-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this role?')) return;
+      await fetch(`/api/roles/${b.dataset.id}`, { method: 'DELETE' }); loadRolesView();
+    }));
+    // Feed the Account form's role dropdown.
+    const sel = $('acc-role');
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— none —</option>' +
+        rows.map(r => `<option value="${_esc(r.name)}">${_esc(r.name)}</option>`).join('');
+      sel.value = cur;
+    }
+  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+}
+
+async function loadDictionary() {
+  const tb = $('dc-body'); if (!tb) return;
+  try {
+    const rows = await (await fetch('/api/dictionary', { cache: 'no-store' })).json();
+    if ($('dc-meta')) $('dc-meta').textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}`;
+    tb.innerHTML = rows.length ? rows.map(d => `<tr>
+      <td><b>${_esc(d.category)}</b></td>
+      <td>${_esc(d.key)}</td>
+      <td>${_esc(d.value) || '—'}</td>
+      <td>${_esc(d.created_at)}</td>
+      <td><button class="ghost-button dc-del" data-id="${d.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`).join('') : _emptyRow(5, 'No dictionary entries yet — add one above.');
+    tb.querySelectorAll('.dc-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this entry?')) return;
+      await fetch(`/api/dictionary/${b.dataset.id}`, { method: 'DELETE' }); loadDictionary();
+    }));
+  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+}
+
+function _wireAddForm(formId, btnId, buildBody, url, okMsg, reload) {
+  $(formId)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $(btnId); btn.disabled = true;
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody()) });
+      const js = await r.json();
+      if (r.ok && js.status === 'ok') { toast(okMsg, 'ok'); $(formId).reset(); reload(); }
+      else { toast('✗ ' + (js.message || 'Failed'), 'err'); }
+    } catch (err) { toast('✗ Network error', 'err'); }
+    finally { btn.disabled = false; }
+  });
+}
+_wireAddForm('acc-form', 'acc-submit', () => ({
+  name: $('acc-name').value.trim(), nickname: $('acc-nick').value.trim(),
+  contact: $('acc-contact').value.trim(), role: $('acc-role').value,
+}), '/api/accounts', '✓ Account added', loadAccounts);
+_wireAddForm('role-mgmt-form', 'rl-submit', () => ({
+  name: $('rl-name').value.trim(), description: $('rl-desc').value.trim(),
+}), '/api/roles', '✓ Role added', loadRolesView);
+_wireAddForm('dict-form', 'dc-submit', () => ({
+  category: $('dc-cat').value.trim(), key: $('dc-key').value.trim(), value: $('dc-val').value.trim(),
+}), '/api/dictionary', '✓ Dictionary entry added', loadDictionary);
+
+Object.assign(_liveLoaders, {
+  'account':    () => { loadRolesView(); loadAccounts(); },  // roles first so dropdown fills
+  'role':       loadRolesView,
+  'dictionary': loadDictionary,
+});
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  const v = btn.dataset.view || btn.dataset.jump;
+  if (v && ['account', 'role', 'dictionary'].includes(v)) {
+    btn.addEventListener('click', () => setTimeout(_liveLoaders[v], 30));
+  }
+});

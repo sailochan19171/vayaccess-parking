@@ -62,7 +62,7 @@ if 'channel_binding=require' in db_url:
 print(f"[INFO] Seeding host: {db_url.split('@')[-1].split('/')[0]}")
 from app import app, db  # noqa: E402  (env vars must be set before import)
 from database import (Whitelist, Tariff, Setting, ParkingTransaction,
-                      AccessLog, AuditEvent, Blacklist, Visitor)
+                      AccessLog, AuditEvent, Blacklist, Visitor, Region, Yard)
 
 with app.app_context():
     counts = {
@@ -74,6 +74,8 @@ with app.app_context():
         'audit_events':         AuditEvent.query.count(),
         'blacklist':            Blacklist.query.count(),
         'visitors':             Visitor.query.count(),
+        'regions':              Region.query.count(),
+        'yards':                Yard.query.count(),
     }
 
 print()

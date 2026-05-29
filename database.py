@@ -359,3 +359,60 @@ class Yard(db.Model):
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
         }
 
+
+# ── System Management tables (WeParking parity) ──────────────────────────────
+# New tables, created automatically by db.create_all() on deploy.
+class Account(db.Model):
+    __tablename__ = 'accounts'
+    id         = db.Column(db.Integer, primary_key=True)
+    name       = db.Column(db.String(120), nullable=False)   # login / account name
+    nickname   = db.Column(db.String(120), nullable=True)
+    contact    = db.Column(db.String(60),  nullable=True)
+    role       = db.Column(db.String(80),  nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":        self.id,
+            "name":      self.name,
+            "nickname":  self.nickname or "",
+            "contact":   self.contact or "",
+            "role":      self.role or "",
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
+
+class Role(db.Model):
+    __tablename__ = 'roles'
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(80), nullable=False)
+    description = db.Column(db.String(255), nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":          self.id,
+            "name":        self.name,
+            "description": self.description or "",
+            "account_count": Account.query.filter(Account.role == self.name).count(),
+            "created_at":  self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
+
+class DictionaryEntry(db.Model):
+    __tablename__ = 'dictionary'
+    id         = db.Column(db.Integer, primary_key=True)
+    category   = db.Column(db.String(80),  nullable=False)   # e.g. "Vehicle Category"
+    dict_key   = db.Column(db.String(120), nullable=False)
+    dict_value = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":       self.id,
+            "category": self.category,
+            "key":      self.dict_key,
+            "value":    self.dict_value or "",
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
