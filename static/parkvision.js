@@ -10,12 +10,31 @@ function switchView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === name));
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active',
                                                                         b.dataset.view === name));
+  // Labels match the WeParking sidebar from VAY Parking Management.pdf.
   const titleMap = {
-    dashboard: 'Dashboard', entry: 'Entry', exit: 'Exit', tariffs: 'Tariffs',
-    devices:   'Devices',   reports: 'Reports', admin: 'Admin',
+    dashboard: 'Home Page',          reports: 'Statistical Management',
+    video: 'Video Monitoring',       'parking-records': 'Parking Records',
+    'scanning-record': 'Scanning Record', devices: 'Lane Monitoring',
+    exit: 'Manual Exit Record',      orders: 'Order Management',
+    admin: 'Member Management',      registered: 'Registered Vehicle',
+    blacklist: 'Black List',         yard: 'Yard Management',
+    region: 'Region Management',     entry: 'Entry', tariffs: 'Tariffs',
   };
-  $('view-title').textContent = titleMap[name] || 'Dashboard';
+  $('view-title').textContent = titleMap[name] || 'Home Page';
 }
+
+// ── Sidebar expandable groups (Parking Inquiry, etc.) ────────────────────────
+// A .nav-group toggles the .nav-sub block that follows it. Clicking a group
+// header expands/collapses; it does NOT switch a view (groups have no data-view).
+document.querySelectorAll('.nav-group').forEach(group => {
+  group.addEventListener('click', () => {
+    const key  = group.dataset.group;
+    const body = document.querySelector(`[data-group-body="${key}"]`);
+    const open = group.getAttribute('aria-expanded') === 'true';
+    group.setAttribute('aria-expanded', String(!open));
+    if (body) body.classList.toggle('open', !open);
+  });
+});
 // Scroll to top of the page whenever the user lands on a new view —
 // applies to sidebar nav clicks AND in-content "jump" buttons.
 function scrollMainToTop() {
@@ -31,7 +50,14 @@ if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 window.addEventListener('load', () => scrollMainToTop());
 window.addEventListener('beforeunload', () => scrollMainToTop());
 document.querySelectorAll('.nav-item').forEach(btn => {
-  btn.addEventListener('click', () => { switchView(btn.dataset.view); scrollMainToTop(); });
+  btn.addEventListener('click', () => {
+    // Group headers (Parking Inquiry) only expand/collapse — they have no
+    // data-view, so don't try to switch to an undefined view (that would
+    // blank the page).
+    if (!btn.dataset.view) return;
+    switchView(btn.dataset.view);
+    scrollMainToTop();
+  });
 });
 // In-content "jump" buttons (e.g. "+ Activate New Tag →")
 document.querySelectorAll('[data-jump]').forEach(el => {

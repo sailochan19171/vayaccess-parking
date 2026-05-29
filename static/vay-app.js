@@ -35,7 +35,12 @@ function cacheElements() {
 
 function bindEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.addEventListener("click", () => switchView(button.dataset.view));
+    button.addEventListener("click", () => {
+      // Skip expandable group headers (no data-view) — they only toggle a
+      // submenu and must not blank the active view.
+      if (!button.dataset.view) return;
+      switchView(button.dataset.view);
+    });
   });
   els["seed-data"]?.addEventListener("click", refreshAll);
   els["vehicle-search"]?.addEventListener("input", renderVehicles);
