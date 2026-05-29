@@ -250,27 +250,27 @@
           <!-- Sidebar mirrors the WeParking layout from VAY Parking Management.pdf.
                Existing views are wired to their nearest section; brand-new sections
                (Video, Order, Yard, Region) are stubs pending their own backend. -->
-          <button class="nav-item active" data-view="dashboard"><span class="nav-ico">🏠</span>Home Page</button>
-          <button class="nav-item" data-view="reports"><span class="nav-ico">📊</span>Statistical Management</button>
-          <button class="nav-item" data-view="video"><span class="nav-ico">📹</span>Video Monitoring</button>
+          <button class="nav-item active" data-view="dashboard"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.2 12 3l9 7.2V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></span>Home Page</button>
+          <button class="nav-item" data-view="reports"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M6 20v-7M11 20V5M16 20v-9"/></svg></span>Statistical Management</button>
+          <button class="nav-item" data-view="video"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4z"/></svg></span>Video Monitoring</button>
 
           <!-- Parking Inquiry — expandable group -->
           <button class="nav-item nav-group" data-group="parking-inquiry" aria-expanded="false">
-            <span class="nav-ico">🔍</span>Parking Inquiry<span class="nav-caret">▾</span>
+            <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>Parking Inquiry<span class="nav-caret">▾</span>
           </button>
           <div class="nav-sub" data-group-body="parking-inquiry">
-            <button class="nav-item nav-child" data-view="parking-records"><span class="nav-ico">▸</span>Parking Records</button>
-            <button class="nav-item nav-child" data-view="scanning-record"><span class="nav-ico">▸</span>Scanning Record</button>
+            <button class="nav-item nav-child" data-view="parking-records"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>Parking Records</button>
+            <button class="nav-item nav-child" data-view="scanning-record"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg></span>Scanning Record</button>
           </div>
 
-          <button class="nav-item" data-view="devices"><span class="nav-ico">🛣️</span>Lane Monitoring</button>
-          <button class="nav-item" data-view="exit"><span class="nav-ico">⤴️</span>Manual Exit Record</button>
-          <button class="nav-item" data-view="orders"><span class="nav-ico">🧾</span>Order Management</button>
-          <button class="nav-item" data-view="admin"><span class="nav-ico">👥</span>Member Management</button>
-          <button class="nav-item" data-view="registered"><span class="nav-ico">🚗</span>Registered Vehicle</button>
-          <button class="nav-item" data-view="blacklist"><span class="nav-ico">⛔</span>Black List</button>
-          <button class="nav-item" data-view="yard"><span class="nav-ico">🅿️</span>Yard Management</button>
-          <button class="nav-item" data-view="region"><span class="nav-ico">🗺️</span>Region Management</button>
+          <button class="nav-item" data-view="devices"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21 7 3M20 21 17 3M12 3v3M12 10v3M12 17v3"/></svg></span>Lane Monitoring</button>
+          <button class="nav-item" data-view="exit"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span>Manual Exit Record</button>
+          <button class="nav-item" data-view="orders"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2v20l2.5-1.5L10 22l2-1.5L14 22l2.5-1.5L19 22V2l-2.5 1.5L14 2l-2 1.5L10 2 7.5 3.5z"/><path d="M9 8h6M9 12h4"/></svg></span>Order Management</button>
+          <button class="nav-item" data-view="admin"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/></svg></span>Member Management</button>
+          <button class="nav-item" data-view="registered"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l1.6-4.3A2 2 0 0 1 8.5 6.2h7a2 2 0 0 1 1.9 1.5L19 12M4 12h16v5h-2v-2H6v2H4z"/><circle cx="7.5" cy="15.5" r="1"/><circle cx="16.5" cy="15.5" r="1"/></svg></span>Registered Vehicle</button>
+          <button class="nav-item" data-view="blacklist"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>Black List</button>
+          <button class="nav-item" data-view="yard"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17V7h3.5a3 3 0 0 1 0 6H9"/></svg></span>Yard Management</button>
+          <button class="nav-item" data-view="region"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5-6 2v14l6-2 6 2 6-2V5l-6 2zM9 5v14M15 7v14"/></svg></span>Region Management</button>
           <!-- Entry + Tariffs views still exist (entry-form is used by Dashboard
                GRANTED auto-fill flow) but are no longer reachable from the nav. -->
         </nav>

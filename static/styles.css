@@ -136,11 +136,30 @@ nav {
 /* Sidebar nav icons + expandable groups (WeParking parity). */
 .nav-ico {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   margin-right: 10px;
   font-size: 0.95em;
   flex: 0 0 auto;
   text-align: center;
+}
+
+/* Vector (SVG) nav icons — Lucide-style stroke icons that inherit the nav
+   text color, so they dim/brighten with hover + active states automatically. */
+.nav-ico svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  opacity: 0.85;
+}
+.nav-item:hover .nav-ico svg,
+.nav-item.active .nav-ico svg {
+  opacity: 1;
+}
+.nav-child .nav-ico svg {
+  width: 15px;
+  height: 15px;
 }
 
 .nav-group {
