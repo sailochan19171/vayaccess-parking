@@ -15,7 +15,8 @@ if not CLOUD_MODE:
 
 from flask import Flask, render_template, request, jsonify, Response
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
-                      Setting, AuditEvent, Blacklist, Visitor, migrate_schema)
+                      Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
+                      migrate_schema)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -2506,6 +2507,116 @@ def api_blacklist_delete(bid):
     db.session.delete(row)
     db.session.commit()
     AuditEvent.log(f"Blacklist remove: {label}", area='Admin')
+    return jsonify({"status": "ok"})
+
+
+# ── Orders (derived ledger, WeParking parity) ────────────────────────────────
+# Orders are NOT a separate table — they're derived on the fly from the two
+# things that actually take money:
+#   • each closed ParkingTransaction  -> "Temporary parking fee" order
+#   • each Whitelist activation payment -> "memberPurchase" order
+# This gives a real, live order list without duplicating data.
+@app.route('/api/orders')
+def api_orders():
+    orders = []
+    txns = (ParkingTransaction.query
+            .filter(ParkingTransaction.exit_at.isnot(None))
+            .order_by(ParkingTransaction.exit_at.desc())
+            .limit(500).all())
+    for t in txns:
+        orders.append({
+            "order_no":   f"PK{t.id:08d}",
+            "type":       "Temporary parking fee",
+            "plate":      t.vehicle or "—",
+            "amount":     t.total_amount or 0,
+            "payment":    t.payment_method or "—",
+            "created_at": t.exit_at.strftime("%Y-%m-%d %H:%M:%S") if t.exit_at else "",
+            "admission":  t.entry_at.strftime("%Y-%m-%d %H:%M:%S") if t.entry_at else "—",
+            "status":     "Paid" if (t.total_amount or 0) > 0 else "Free",
+        })
+    members = (Whitelist.query
+               .filter(Whitelist.paid_at.isnot(None))
+               .order_by(Whitelist.paid_at.desc()).all())
+    for w in members:
+        orders.append({
+            "order_no":   f"MB{w.id:08d}",
+            "type":       "memberPurchase",
+            "plate":      w.number_plate or "—",
+            "amount":     w.payment_amount or 0,
+            "payment":    w.payment_method or "—",
+            "created_at": w.paid_at.strftime("%Y-%m-%d %H:%M:%S") if w.paid_at else "",
+            "admission":  "—",
+            "status":     "Paid",
+        })
+    # Newest first across both kinds.
+    orders.sort(key=lambda o: o["created_at"], reverse=True)
+    return jsonify(orders)
+
+
+# ── Yards (parking lots) ─────────────────────────────────────────────────────
+@app.route('/api/yards', methods=['GET', 'POST'])
+def api_yards():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Yard name is required"}), 400
+        try:
+            capacity = max(0, int(data.get('capacity', 0) or 0))
+        except (TypeError, ValueError):
+            capacity = 0
+        if Yard.query.filter(db.func.lower(Yard.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Yard '{name}' already exists"}), 400
+        db.session.add(Yard(name=name, capacity=capacity,
+                            location=(data.get('location') or '').strip() or None,
+                            region=(data.get('region') or '').strip() or None))
+        db.session.commit()
+        AuditEvent.log(f"Yard added: {name}", area='Admin')
+        return jsonify({"status": "ok"})
+    return jsonify([y.to_dict()
+                    for y in Yard.query.order_by(Yard.name).all()])
+
+
+@app.route('/api/yards/<int:yid>', methods=['DELETE'])
+def api_yards_delete(yid):
+    row = Yard.query.get(yid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    name = row.name
+    db.session.delete(row)
+    db.session.commit()
+    AuditEvent.log(f"Yard removed: {name}", area='Admin')
+    return jsonify({"status": "ok"})
+
+
+# ── Regions (group of yards) ─────────────────────────────────────────────────
+@app.route('/api/regions', methods=['GET', 'POST'])
+def api_regions():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Region name is required"}), 400
+        if Region.query.filter(db.func.lower(Region.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Region '{name}' already exists"}), 400
+        db.session.add(Region(name=name,
+                              description=(data.get('description') or '').strip() or None))
+        db.session.commit()
+        AuditEvent.log(f"Region added: {name}", area='Admin')
+        return jsonify({"status": "ok"})
+    return jsonify([r.to_dict()
+                    for r in Region.query.order_by(Region.name).all()])
+
+
+@app.route('/api/regions/<int:rid>', methods=['DELETE'])
+def api_regions_delete(rid):
+    row = Region.query.get(rid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    name = row.name
+    db.session.delete(row)
+    db.session.commit()
+    AuditEvent.log(f"Region removed: {name}", area='Admin')
     return jsonify({"status": "ok"})
 
 

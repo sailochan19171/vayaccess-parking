@@ -997,18 +997,37 @@
           </section>
         </section>
 
-        <!-- Order Management -->
+        <!-- Order Management — live from /api/orders (derived) -->
         <section id="orders" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">🧾</div>
-            <h2>Order Management</h2>
-            <p>Payment orders, refunds, and reconciliation against UPI/cash
-              collection.</p>
-            <p class="stub-note">Activation payments are captured today under
-              <a href="#" data-jump="admin" class="stub-link">Member Management</a>.
-              A full order/billing ledger (one row per transaction, refunds,
-              statements) is a later phase.</p>
-          </div>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Order Management</h2>
+                <p class="hint" style="margin:2px 0 0;" id="od-meta">Loading…</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="od-search" placeholder="Search order / plate…"
+                       style="margin:0; min-width:200px;">
+                <select id="od-type" style="margin:0;">
+                  <option value="">All order types</option>
+                  <option value="Temporary parking fee">Temporary parking fee</option>
+                  <option value="memberPurchase">memberPurchase</option>
+                </select>
+                <button class="ghost-button" id="od-refresh" type="button">↻ Refresh</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table id="od-table">
+                <thead>
+                  <tr><th>Order Number</th><th>Order Type</th><th>License Plate</th>
+                    <th>Amount</th><th>Payment</th><th>Order Created</th><th>Admission Time</th><th>Status</th></tr>
+                </thead>
+                <tbody id="od-body">
+                  <tr><td colspan="8" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
         <!-- Registered Vehicle — live from /api/employees -->
@@ -1068,27 +1087,69 @@
           </section>
         </section>
 
-        <!-- Yard Management -->
+        <!-- Yard Management — live CRUD from /api/yards -->
         <section id="yard" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">🅿️</div>
-            <h2>Yard Management</h2>
-            <p>Define parking yards/lots, their capacity, and slot allocation.</p>
-            <p class="stub-note">Multi-yard hierarchy is a later-phase feature.
-              Today the system runs a single yard with a configurable capacity
-              (set in <a href="#" data-jump="reports" class="stub-link">settings</a>).</p>
-          </div>
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Parking Yard</h2></div>
+            <form id="yard-form" autocomplete="off"
+                  style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; align-items:end;">
+              <label>Yard Name *<input type="text" id="yard-name" required placeholder="Basement A"></label>
+              <label>Capacity *<input type="number" id="yard-capacity" required min="0" step="1" placeholder="120"></label>
+              <label>Location<input type="text" id="yard-location" placeholder="Block A, Level -1"></label>
+              <label>Region
+                <select id="yard-region"><option value="">— none —</option></select>
+              </label>
+              <div style="grid-column: 1 / -1;">
+                <button type="submit" id="yard-submit">+ Add Yard</button>
+              </div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Parking Yards</h2>
+              <span class="hint" id="yard-meta">Loading…</span>
+            </div>
+            <div class="table-wrap">
+              <table id="yard-table">
+                <thead>
+                  <tr><th>Yard Name</th><th>Capacity</th><th>Occupied</th><th>Available</th>
+                    <th>Location</th><th>Region</th><th>Action</th></tr>
+                </thead>
+                <tbody id="yard-body">
+                  <tr><td colspan="7" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
-        <!-- Region Management -->
+        <!-- Region Management — live CRUD from /api/regions -->
         <section id="region" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">🗺️</div>
-            <h2>Region Management</h2>
-            <p>Group yards into regions for multi-site operators.</p>
-            <p class="stub-note">Multi-region hierarchy is a later-phase feature
-              for operators running more than one site.</p>
-          </div>
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Region</h2></div>
+            <form id="region-form" autocomplete="off"
+                  style="display:grid; grid-template-columns: 1fr 2fr auto; gap:12px; align-items:end;">
+              <label>Region Name *<input type="text" id="region-name" required placeholder="Hyderabad - North"></label>
+              <label>Description<input type="text" id="region-desc" placeholder="Covers GMR cargo + terminal lots"></label>
+              <div><button type="submit" id="region-submit">+ Add Region</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Regions</h2>
+              <span class="hint" id="region-meta">Loading…</span>
+            </div>
+            <div class="table-wrap">
+              <table id="region-table">
+                <thead>
+                  <tr><th>Region Name</th><th>Yards</th><th>Description</th><th>Created</th><th>Action</th></tr>
+                </thead>
+                <tbody id="region-body">
+                  <tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
         <!-- ─── ADMIN ───────────────────────────────────────────────────── -->

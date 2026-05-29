@@ -2062,3 +2062,139 @@ setInterval(() => {
     if (document.getElementById(view)?.classList.contains('active')) fn();
   }
 }, 5000);
+
+// ── Phase 3: Order Management / Yard Management / Region Management ───────────
+async function loadOrders() {
+  const tb = $('od-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/orders', { cache: 'no-store' });
+    const js = await r.json();
+    const q = ($('od-search')?.value || '').trim().toUpperCase();
+    const ty = $('od-type')?.value || '';
+    const rows = (Array.isArray(js) ? js : []).filter(o =>
+      (!ty || o.type === ty) &&
+      (!q || (o.order_no || '').toUpperCase().includes(q) || (o.plate || '').toUpperCase().includes(q)));
+    if ($('od-meta')) $('od-meta').textContent = `${rows.length} order(s)`;
+    tb.innerHTML = rows.length ? rows.map(o => `<tr>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(o.order_no)}</td>
+      <td>${_esc(o.type)}</td>
+      <td style="font-family:monospace;">${_esc(o.plate)}</td>
+      <td>₹${o.amount || 0}</td>
+      <td>${_esc(o.payment)}</td>
+      <td>${_esc(o.created_at)}</td>
+      <td>${_esc(o.admission)}</td>
+      <td><span class="scan-status-badge ${o.status === 'Paid' ? 'granted' : 'scanning'}">${_esc(o.status)}</span></td>
+    </tr>`).join('') : _emptyRow(8, 'No orders yet.');
+  } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
+}
+
+async function loadYards() {
+  const tb = $('yard-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/yards', { cache: 'no-store' });
+    const js = await r.json();
+    const rows = Array.isArray(js) ? js : [];
+    if ($('yard-meta')) $('yard-meta').textContent = `${rows.length} yard(s)`;
+    tb.innerHTML = rows.length ? rows.map(y => `<tr>
+      <td><b>${_esc(y.name)}</b></td>
+      <td>${y.capacity}</td>
+      <td>${y.occupied}</td>
+      <td>${y.available}</td>
+      <td>${_esc(y.location) || '—'}</td>
+      <td>${_esc(y.region) || '—'}</td>
+      <td><button class="ghost-button yard-del" data-id="${y.id}"
+             style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`).join('') : _emptyRow(7, 'No yards yet — add one above.');
+    tb.querySelectorAll('.yard-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this yard?')) return;
+      await fetch(`/api/yards/${b.dataset.id}`, { method: 'DELETE' });
+      loadYards();
+    }));
+  } catch (e) { tb.innerHTML = _emptyRow(7, 'Failed to load.'); }
+}
+
+async function loadRegions() {
+  const tb = $('region-body'); if (!tb) return;
+  try {
+    const r = await fetch('/api/regions', { cache: 'no-store' });
+    const js = await r.json();
+    const rows = Array.isArray(js) ? js : [];
+    if ($('region-meta')) $('region-meta').textContent = `${rows.length} region(s)`;
+    tb.innerHTML = rows.length ? rows.map(rg => `<tr>
+      <td><b>${_esc(rg.name)}</b></td>
+      <td>${rg.yard_count}</td>
+      <td>${_esc(rg.description) || '—'}</td>
+      <td>${_esc(rg.created_at)}</td>
+      <td><button class="ghost-button region-del" data-id="${rg.id}"
+             style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`).join('') : _emptyRow(5, 'No regions yet — add one above.');
+    tb.querySelectorAll('.region-del').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this region?')) return;
+      await fetch(`/api/regions/${b.dataset.id}`, { method: 'DELETE' });
+      loadRegions();
+    }));
+    // Keep the Yard form's region dropdown in sync with existing regions.
+    const sel = $('yard-region');
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— none —</option>' +
+        rows.map(rg => `<option value="${_esc(rg.name)}">${_esc(rg.name)}</option>`).join('');
+      sel.value = cur;
+    }
+  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+}
+
+// Add-yard form
+$('yard-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    name:     $('yard-name').value.trim(),
+    capacity: parseInt($('yard-capacity').value, 10) || 0,
+    location: $('yard-location').value.trim(),
+    region:   $('yard-region').value,
+  };
+  const btn = $('yard-submit'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/yards', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const js = await r.json();
+    if (r.ok && js.status === 'ok') { toast(`✓ Yard "${body.name}" added`, 'ok'); $('yard-form').reset(); loadYards(); }
+    else { toast('✗ ' + (js.message || 'Failed'), 'err'); }
+  } catch (err) { toast('✗ Network error', 'err'); }
+  finally { btn.disabled = false; }
+});
+
+// Add-region form
+$('region-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { name: $('region-name').value.trim(), description: $('region-desc').value.trim() };
+  const btn = $('region-submit'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/regions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const js = await r.json();
+    if (r.ok && js.status === 'ok') { toast(`✓ Region "${body.name}" added`, 'ok'); $('region-form').reset(); loadRegions(); }
+    else { toast('✗ ' + (js.message || 'Failed'), 'err'); }
+  } catch (err) { toast('✗ Network error', 'err'); }
+  finally { btn.disabled = false; }
+});
+
+// Register the 3 new sections with the same open-on-click + live-refresh system.
+Object.assign(_liveLoaders, {
+  'orders': loadOrders,
+  'yard':   () => { loadRegions(); loadYards(); },   // regions first so the dropdown fills
+  'region': loadRegions,
+});
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  const v = btn.dataset.view || btn.dataset.jump;
+  if (v && ['orders', 'yard', 'region'].includes(v)) {
+    btn.addEventListener('click', () => setTimeout(_liveLoaders[v], 30));
+  }
+});
+$('od-search')?.addEventListener('input', loadOrders);
+$('od-type')?.addEventListener('change', loadOrders);
+$('od-refresh')?.addEventListener('click', loadOrders);

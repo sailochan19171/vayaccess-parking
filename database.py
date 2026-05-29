@@ -309,3 +309,53 @@ class AccessLog(db.Model):
             "status": self.status
         }
 
+
+# ── Region + Yard (org hierarchy, WeParking parity) ──────────────────────────
+# New tables — db.create_all() creates them automatically on deploy, no
+# migrate_schema needed. A Region groups one or more Yards (parking lots).
+class Region(db.Model):
+    __tablename__ = 'regions'
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.String(300), nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":          self.id,
+            "name":        self.name,
+            "description": self.description or "",
+            "yard_count":  Yard.query.filter(Yard.region == self.name).count(),
+            "created_at":  self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
+
+class Yard(db.Model):
+    __tablename__ = 'yards'
+    id         = db.Column(db.Integer, primary_key=True)
+    name       = db.Column(db.String(120), nullable=False)
+    capacity   = db.Column(db.Integer, default=0)
+    location   = db.Column(db.String(200), nullable=True)
+    region     = db.Column(db.String(120), nullable=True)   # matches Region.name
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def occupied(self):
+        # Live occupancy = vehicles currently parked in this yard (zone match).
+        return ParkingTransaction.query.filter(
+            ParkingTransaction.zone == self.name,
+            ParkingTransaction.exit_at.is_(None)).count()
+
+    def to_dict(self):
+        occ = self.occupied()
+        cap = self.capacity or 0
+        return {
+            "id":        self.id,
+            "name":      self.name,
+            "capacity":  cap,
+            "occupied":  occ,
+            "available": max(0, cap - occ),
+            "location":  self.location or "",
+            "region":    self.region or "",
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
