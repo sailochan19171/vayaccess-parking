@@ -1129,6 +1129,286 @@ td, th, .epc, code, .scan-row dd,
 }
 
 /* ──────────────────────────────────────────────────────────────────────
+   Monitoring Center (PDF page 4). Dark dual-camera layout — kept self-
+   contained so the SaaS-light theme on every other page is unaffected.
+   ────────────────────────────────────────────────────────────────────── */
+.monitoring-center {
+  background: linear-gradient(180deg, #0c1c3a 0%, #142a52 50%, #0a1730 100%);
+  color: #f1f5ff;
+  border-radius: 12px;
+  padding: 22px 26px;
+  min-height: calc(100vh - 200px);
+}
+
+.mc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.mc-title {
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin: 0;
+  color: #1f73d4;
+}
+
+.mc-title-accent {
+  color: #f1f5ff;
+}
+
+.mc-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mc-meta-cell {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.92rem;
+  color: #cfd9ec;
+}
+
+.mc-pill {
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.mc-clock {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f1f5ff;
+}
+
+.mc-home {
+  width: 42px;
+  height: 42px;
+  min-height: 0;
+  border-radius: 10px;
+  background: #1f73d4;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+}
+
+.mc-home svg {
+  width: 22px;
+  height: 22px;
+}
+
+.mc-areas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+
+.mc-area-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.mc-area-sub {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #9fb1d2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2cd47f;
+  box-shadow: 0 0 8px rgba(44, 212, 127, 0.5);
+}
+
+.mc-dot-exit {
+  background: #ffb84d;
+  box-shadow: 0 0 8px rgba(255, 184, 77, 0.5);
+}
+
+.mc-card {
+  background: linear-gradient(180deg, rgba(20, 38, 72, 0.85), rgba(12, 26, 54, 0.85));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.mc-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.mc-flag {
+  background: rgba(31, 115, 212, 0.18);
+  color: #6bb1ff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  letter-spacing: 0.4px;
+}
+
+.mc-flag-exit {
+  background: rgba(255, 184, 77, 0.18);
+  color: #ffce85;
+}
+
+.mc-info-label {
+  color: #f1f5ff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mc-info-flag {
+  width: 14px;
+  height: 14px;
+  background: #2cd47f;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.mc-info-flag-exit {
+  background: #ffb84d;
+}
+
+.mc-card-body {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.mc-cam {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 4/3;
+  min-height: 160px;
+}
+
+.mc-cam img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.mc-cam-offline {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  color: #6c7a96;
+  background: linear-gradient(135deg, #0d1a36, #08122a);
+}
+
+.mc-cam-offline svg {
+  width: 30px;
+  height: 30px;
+  opacity: 0.45;
+}
+
+.mc-cam-offline small {
+  color: #4a5778;
+  font-size: 0.72rem;
+}
+
+.mc-info {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+}
+
+.mc-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.88rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 6px;
+}
+
+.mc-info-row:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.mc-info-row > span:first-child { color: #9fb1d2; }
+.mc-info-row > b { color: #4ec3ff; font-weight: 700; font-family: 'Consolas','Monaco',monospace; font-size: 1.05rem; }
+.mc-info-row > span:nth-child(2) { color: #f1f5ff; font-weight: 600; }
+
+.mc-plate-text { color: #4ec3ff; }
+
+.mc-plate-band {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.mc-plate-thumb {
+  width: 110px;
+  height: 36px;
+  background: linear-gradient(135deg, #fde047, #facc15);
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.mc-plate-mag {
+  flex: 1;
+  font-family: 'Consolas','Monaco',monospace;
+  font-weight: 800;
+  font-size: 1.4rem;
+  letter-spacing: 6px;
+  color: #f1f5ff;
+  background: #0a1428;
+  border-radius: 6px;
+  padding: 6px 14px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .mc-areas { grid-template-columns: 1fr; }
+  .mc-card-body { grid-template-columns: 1fr; }
+}
+
+/* ──────────────────────────────────────────────────────────────────────
    Consistent alignment for every data table added in the WeParking rebuild
    (dashboard Access History, Order Management, and the Parking/Scanning/
    Registered/Black-List/Yard/Region tables). The ragged-header problem comes

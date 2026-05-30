@@ -969,16 +969,93 @@
              Some link to where the data already lives in this app; the rest are
              placeholders for features whose backend is a later phase. -->
 
-        <!-- Video Monitoring -->
+        <!-- Video Monitoring — Monitoring Center layout (PDF p4) -->
         <section id="video" class="view">
-          <div class="stub-panel panel">
-            <div class="stub-ico">📹</div>
-            <h2>Video Monitoring</h2>
-            <p>Live entrance/exit camera feeds with on-frame plate capture.</p>
-            <p class="stub-note">Live RTSP video can only be served from a machine
-              on the same network as the cameras (<code>192.168.x.x</code>). The
-              on-site build streams this via MJPEG; the cloud build can't reach
-              the cameras directly. This is a later-phase integration.</p>
+          <div class="monitoring-center">
+            <header class="mc-header">
+              <h2 class="mc-title">Monitoring<span class="mc-title-accent">Center</span></h2>
+              <div class="mc-meta">
+                <div class="mc-meta-cell mc-pill">Access-vay-<br>Monitoring</div>
+                <div class="mc-meta-cell mc-clock" id="mc-clock">--:--:--</div>
+                <div class="mc-meta-cell mc-date" id="mc-date">—</div>
+                <button class="mc-home" data-jump="dashboard" type="button" title="Back to dashboard">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 10.2 12 3l9 7.2V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>
+                  </svg>
+                </button>
+              </div>
+            </header>
+
+            <div class="mc-areas">
+              <!-- ── Area 1: Entrance ────────────────────────────────────── -->
+              <section class="mc-area">
+                <div class="mc-area-label">
+                  <span>Area 1</span>
+                  <span class="mc-area-sub"><span class="mc-dot"></span>Entrance</span>
+                </div>
+                <div class="mc-card">
+                  <div class="mc-card-head">
+                    <span class="mc-flag">Entrance</span>
+                    <span class="mc-info-label">Vehicle entry information<span class="mc-info-flag"></span></span>
+                  </div>
+                  <div class="mc-card-body">
+                    <div class="mc-cam">
+                      <img id="mc-cam-entry" src="/api/latest_frame.jpg" alt="Entry camera"
+                           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                      <div class="mc-cam-offline" style="display:none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="m4 4 16 16"/></svg>
+                        <div>Entry camera offline</div>
+                        <small>Live RTSP feed only available on-site</small>
+                      </div>
+                    </div>
+                    <div class="mc-info">
+                      <div class="mc-info-row"><span>License Plate</span><b class="mc-plate-text" id="mc-entry-plate">—</b></div>
+                      <div class="mc-info-row"><span>Vehicle type</span><span id="mc-entry-type">—</span></div>
+                      <div class="mc-info-row"><span>Entry Time</span><span id="mc-entry-time">—</span></div>
+                    </div>
+                  </div>
+                  <div class="mc-plate-band">
+                    <div class="mc-plate-thumb" id="mc-entry-thumb"></div>
+                    <div class="mc-plate-mag" id="mc-entry-mag">— — — — — — —</div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- ── Area 2: Exit ──────────────────────────────────────────── -->
+              <section class="mc-area">
+                <div class="mc-area-label">
+                  <span>Area 2</span>
+                  <span class="mc-area-sub"><span class="mc-dot mc-dot-exit"></span>Exit</span>
+                </div>
+                <div class="mc-card">
+                  <div class="mc-card-head">
+                    <span class="mc-flag mc-flag-exit">Exit</span>
+                    <span class="mc-info-label">Vehicle appearance information<span class="mc-info-flag mc-info-flag-exit"></span></span>
+                  </div>
+                  <div class="mc-card-body">
+                    <div class="mc-cam">
+                      <img id="mc-cam-exit" src="/api/latest_frame.jpg" alt="Exit camera"
+                           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                      <div class="mc-cam-offline" style="display:none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="m4 4 16 16"/></svg>
+                        <div>Exit camera offline</div>
+                        <small>Live RTSP feed only available on-site</small>
+                      </div>
+                    </div>
+                    <div class="mc-info">
+                      <div class="mc-info-row"><span>License Plate</span><b class="mc-plate-text" id="mc-exit-plate">—</b></div>
+                      <div class="mc-info-row"><span>Vehicle type</span><span id="mc-exit-type">—</span></div>
+                      <div class="mc-info-row"><span>Dwell time</span><span id="mc-exit-dwell">—</span></div>
+                      <div class="mc-info-row"><span>Charge</span><span id="mc-exit-charge">—</span></div>
+                    </div>
+                  </div>
+                  <div class="mc-plate-band">
+                    <div class="mc-plate-thumb" id="mc-exit-thumb"></div>
+                    <div class="mc-plate-mag" id="mc-exit-mag">— — — — — — —</div>
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
         </section>
 

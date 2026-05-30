@@ -2649,3 +2649,70 @@ document.addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('[data-edit]');
   if (b) openEditModal(b.dataset.editSec, b.dataset.edit);
 });
+
+// ── Phase 7: Monitoring Center (PDF p4) — Video Monitoring section ───────────
+const _MC_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function _mcSpread(s) {
+  return (s && s !== '—') ? String(s).split('').join(' ') : '— — — — — — —';
+}
+
+function _mcSetCam(imgId) {
+  const img = $(imgId); if (!img) return;
+  const offline = img.nextElementSibling;
+  img.onload  = () => { img.style.display = '';     if (offline) offline.style.display = 'none'; };
+  img.onerror = () => { img.style.display = 'none'; if (offline) offline.style.display = 'flex'; };
+  img.src = '/api/latest_frame.jpg?t=' + Date.now();
+}
+
+async function loadMonitoring() {
+  if (!$('mc-clock')) return;
+  // Clock + date (same layout as the PDF: time on one line, "yyyy-mm-dd" + day name).
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  $('mc-clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  $('mc-date').innerHTML = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}<br>${_MC_DAYS[d.getDay()]}`;
+
+  // Area 1 — Entrance: latest scan from /api/state (dashboard_state).
+  try {
+    const s = await (await fetch('/api/state', { cache: 'no-store' })).json();
+    const plate = (s.latest_plate && !/wait/i.test(s.latest_plate)) ? s.latest_plate : '—';
+    $('mc-entry-plate').textContent = plate;
+    $('mc-entry-type').textContent  = s.vehicle_type || '—';
+    $('mc-entry-time').textContent  = s.latest_tag_time || '—';
+    $('mc-entry-mag').textContent   = _mcSpread(plate);
+  } catch (e) { /* leave dashes */ }
+
+  // Area 2 — Exit: most recent closed transaction.
+  try {
+    const txns = await (await fetch('/api/transactions?limit=1', { cache: 'no-store' })).json();
+    const t = Array.isArray(txns) && txns[0];
+    if (t) {
+      $('mc-exit-plate').textContent  = t.vehicle || '—';
+      $('mc-exit-type').textContent   = t.type    || '—';
+      $('mc-exit-dwell').textContent  = _dwell(t.entryAt, t.exitAt);
+      $('mc-exit-charge').textContent = '₹' + (t.total || 0);
+      $('mc-exit-mag').textContent    = _mcSpread(t.vehicle);
+    }
+  } catch (e) { /* leave dashes */ }
+
+  // Cache-bust the camera images so they refresh; onerror swaps in the offline
+  // overlay (cloud can't reach the LAN cameras; on-site streams via MJPEG).
+  _mcSetCam('mc-cam-entry');
+  _mcSetCam('mc-cam-exit');
+}
+
+// Wire to the open-on-click + 5s live-refresh system.
+Object.assign(_liveLoaders, { 'video': loadMonitoring });
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'video') {
+    btn.addEventListener('click', () => setTimeout(loadMonitoring, 30));
+  }
+});
+// Tick the clock every second while the Monitoring Center is visible.
+setInterval(() => {
+  if (document.getElementById('video')?.classList.contains('active')) {
+    const d = new Date(); const p = (n) => String(n).padStart(2, '0');
+    if ($('mc-clock')) $('mc-clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+}, 1000);
