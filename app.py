@@ -2817,6 +2817,55 @@ def api_regions_update(rid):
     return jsonify({"status": "ok", "region": row.to_dict()})
 
 
+# ── Home Page summary (PDF page 5 layout) ────────────────────────────────────
+# Powers the 4 gradient metric cards + grouped entry/exit bar chart + the
+# Income Statistics donut. Aggregated over the last 8 days so the daily bars
+# match the PDF.
+@app.route('/api/home_summary')
+def api_home_summary():
+    from datetime import date, timedelta as _td
+
+    parking_total = ParkingTransaction.query.count()
+    member_total  = Whitelist.query.filter(Whitelist.department.isnot(None)).count()
+    # 3 hardware devices reported by /api/devices on-site (SRK, gate reader, cam).
+    device_total  = 3
+    # Orders = closed parking txns + paid member activations (same definition as /api/orders).
+    order_total   = (ParkingTransaction.query.filter(ParkingTransaction.exit_at.isnot(None)).count()
+                     + Whitelist.query.filter(Whitelist.paid_at.isnot(None)).count())
+
+    today  = date.today()
+    daily  = []
+    for i in range(7, -1, -1):
+        d     = today - _td(days=i)
+        start = datetime(d.year, d.month, d.day)
+        end   = start + _td(days=1)
+        entries = ParkingTransaction.query.filter(
+            ParkingTransaction.entry_at >= start,
+            ParkingTransaction.entry_at <  end).count()
+        exits   = ParkingTransaction.query.filter(
+            ParkingTransaction.exit_at  >= start,
+            ParkingTransaction.exit_at  <  end).count()
+        daily.append({"date": d.strftime("%Y-%m-%d"),
+                      "entries": entries, "exits": exits})
+
+    temporary_income = db.session.query(
+        db.func.coalesce(db.func.sum(ParkingTransaction.total_amount), 0)
+    ).filter(ParkingTransaction.exit_at.isnot(None)).scalar() or 0
+    member_income = db.session.query(
+        db.func.coalesce(db.func.sum(Whitelist.payment_amount), 0)
+    ).filter(Whitelist.paid_at.isnot(None)).scalar() or 0
+
+    return jsonify({
+        "parking_total": parking_total,
+        "member_total":  member_total,
+        "device_total":  device_total,
+        "order_total":   order_total,
+        "daily":         daily,
+        "income": {"temporary": int(temporary_income),
+                   "member":    int(member_income)},
+    })
+
+
 @app.route('/api/visitors/<int:vid>', methods=['PUT'])
 def api_visitors_update(vid):
     row = Visitor.query.get(vid)

@@ -340,6 +340,51 @@
 
         <!-- ─── DASHBOARD ───────────────────────────────────────────────── -->
         <section id="dashboard" class="view active">
+          <!-- ── Home Page summary (PDF page 5): gradient cards + charts ───── -->
+          <div class="home-summary">
+            <div class="home-cards">
+              <article class="home-card home-card-purple">
+                <div class="home-card-label">Parking Total</div>
+                <div class="home-card-value" id="hs-parking-total">0</div>
+              </article>
+              <article class="home-card home-card-blue">
+                <div class="home-card-label">Total number of members</div>
+                <div class="home-card-value" id="hs-member-total">0</div>
+              </article>
+              <article class="home-card home-card-cyan">
+                <div class="home-card-label">Total number of devices</div>
+                <div class="home-card-value" id="hs-device-total">0</div>
+              </article>
+              <article class="home-card home-card-orange">
+                <div class="home-card-label">Total Order</div>
+                <div class="home-card-value" id="hs-order-total">0</div>
+              </article>
+            </div>
+            <div class="home-charts">
+              <section class="panel home-bar-panel">
+                <div class="home-chart-legend">
+                  <span class="home-legend-item"><span class="home-legend-dot" style="background:#1f73d4;"></span>Entry Vehicle</span>
+                  <span class="home-legend-item"><span class="home-legend-dot" style="background:#f59e0b;"></span>Exit Vehicle</span>
+                </div>
+                <div class="home-bar-chart" id="hs-bar-chart"></div>
+              </section>
+              <section class="panel home-donut-panel">
+                <h3 class="home-panel-title">Income Statistics</h3>
+                <div class="home-donut-wrap">
+                  <svg id="hs-donut" viewBox="0 0 200 200" class="home-donut"></svg>
+                  <div class="home-donut-center">
+                    <div class="home-donut-total" id="hs-income-total">₹0</div>
+                    <div class="home-donut-label">Total Income</div>
+                  </div>
+                </div>
+                <div class="home-donut-legend">
+                  <div class="home-legend-row"><span class="home-legend-dot" style="background:#2cd47f;"></span>Temporary Income<b id="hs-income-temp">₹0</b></div>
+                  <div class="home-legend-row"><span class="home-legend-dot" style="background:#f59e0b;"></span>Member Income<b id="hs-income-mem">₹0</b></div>
+                </div>
+              </section>
+            </div>
+          </div>
+
           <div class="metric-grid">
             <article class="metric">
               <span>Occupancy</span>

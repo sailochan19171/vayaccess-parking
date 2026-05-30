@@ -2716,3 +2716,77 @@ setInterval(() => {
     if ($('mc-clock')) $('mc-clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   }
 }, 1000);
+
+// ── Phase 8: Home Page summary (PDF p5 layout) — gradient cards + charts ─────
+function _hsAnimateValue(elId, target) {
+  const el = $(elId); if (!el) return;
+  const start = parseInt(el.textContent.replace(/[^\d-]/g, ''), 10) || 0;
+  const dur = 600; const t0 = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - t0) / dur);
+    el.textContent = Math.round(start + (target - start) * t).toLocaleString();
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function _hsRenderBars(daily) {
+  const root = $('hs-bar-chart'); if (!root) return;
+  if (!daily || !daily.length) { root.innerHTML = '<div style="margin:auto; color:var(--muted);">No data</div>'; return; }
+  const maxV = Math.max(1, ...daily.flatMap(d => [d.entries, d.exits]));
+  root.innerHTML = daily.map(d => {
+    const ePct = (d.entries / maxV) * 100;
+    const xPct = (d.exits / maxV) * 100;
+    return `<div class="home-bar-group">
+      <div class="home-bar" style="height:${ePct}%;">${d.entries ? `<span class="home-bar-value">${d.entries}</span>` : ''}</div>
+      <div class="home-bar home-bar-exit" style="height:${xPct}%;">${d.exits ? `<span class="home-bar-value">${d.exits}</span>` : ''}</div>
+      <span class="home-bar-label">${d.date.slice(5)}</span>
+    </div>`;
+  }).join('');
+}
+
+function _hsRenderDonut(temp, member) {
+  const svg = $('hs-donut'); if (!svg) return;
+  const total = temp + member;
+  const R = 80, CX = 100, CY = 100, SW = 28;
+  const circ = 2 * Math.PI * R;
+  if (!total) {
+    svg.innerHTML = `<circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="#e5e9ef" stroke-width="${SW}"/>`;
+  } else {
+    const tempFrac = temp / total;
+    const tempLen  = circ * tempFrac;
+    const memLen   = circ * (1 - tempFrac);
+    svg.innerHTML = `
+      <circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="#2cd47f" stroke-width="${SW}"
+        stroke-dasharray="${tempLen} ${circ - tempLen}" stroke-dashoffset="0"/>
+      <circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="#f59e0b" stroke-width="${SW}"
+        stroke-dasharray="${memLen} ${circ - memLen}" stroke-dashoffset="-${tempLen}"/>
+    `;
+  }
+  if ($('hs-income-total')) $('hs-income-total').textContent = '₹' + total.toLocaleString();
+  if ($('hs-income-temp'))  $('hs-income-temp').textContent  = '₹' + temp.toLocaleString();
+  if ($('hs-income-mem'))   $('hs-income-mem').textContent   = '₹' + member.toLocaleString();
+}
+
+async function loadHomeSummary() {
+  if (!$('hs-parking-total')) return;
+  try {
+    const s = await (await fetch('/api/home_summary', { cache: 'no-store' })).json();
+    _hsAnimateValue('hs-parking-total', s.parking_total || 0);
+    _hsAnimateValue('hs-member-total',  s.member_total  || 0);
+    _hsAnimateValue('hs-device-total',  s.device_total  || 0);
+    _hsAnimateValue('hs-order-total',   s.order_total   || 0);
+    _hsRenderBars(s.daily || []);
+    _hsRenderDonut(s.income?.temporary || 0, s.income?.member || 0);
+  } catch (e) { /* ignore */ }
+}
+
+// Register with the open-on-click + 5s live-refresh system.
+Object.assign(_liveLoaders, { 'dashboard': loadHomeSummary });
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'dashboard') {
+    btn.addEventListener('click', () => setTimeout(loadHomeSummary, 30));
+  }
+});
+// Load once on page load so the dashboard (default view) populates immediately.
+loadHomeSummary();
