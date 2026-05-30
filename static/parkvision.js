@@ -3019,3 +3019,109 @@ document.addEventListener('click', (e) => {
   // data-qr-kind, data-qr-id, data-qr-title, data-qr-meta (separate attrs avoid escaping pain)
   openQrModal(b.dataset.qrKind, b.dataset.qrId, b.dataset.qrTitle, b.dataset.qrMeta);
 });
+
+// ── Phase 11: LCD Display CRUD + Batch Delete on CRUD tables ─────────────────
+async function loadLCD() {
+  const tb = $('lcd-body'); if (!tb) return;
+  try {
+    const raw = await (await fetch('/api/lcd', { cache: 'no-store' })).json();
+    const rows = _filterRows(Array.isArray(raw) ? raw : [], $('lcd-search')?.value, ['name', 'location', 'message']);
+    if ($('lcd-meta')) $('lcd-meta').textContent = `${rows.length} screen(s)`;
+    paginate('lcd', rows, 'lcd-body', s => `<tr>
+      <td><b>${_esc(s.name)}</b></td>
+      <td>${_esc(s.location) || '—'}</td>
+      <td>${_esc(s.message) || '—'}</td>
+      <td><span class="scan-status-badge ${s.is_active ? 'granted' : 'denied'}">${_esc(s.status)}</span></td>
+      <td>${_esc(s.created_at)}</td>
+      <td>
+        <button class="ghost-button" data-edit="${s.id}" data-edit-sec="lcd" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button>
+        <button class="ghost-button lcd-del" data-id="${s.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button>
+      </td>
+    </tr>`, 6, (tb) => {
+      tb.querySelectorAll('.lcd-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this LCD screen?')) return;
+        await fetch(`/api/lcd/${b.dataset.id}`, { method: 'DELETE' });
+        loadLCD();
+      }));
+    });
+  } catch (e) { tb.innerHTML = _emptyRow(6, 'Failed to load.'); }
+}
+
+_wireAddForm('lcd-form', 'lcd-submit', () => ({
+  name:      $('lcd-name').value.trim(),
+  location:  $('lcd-location').value.trim(),
+  message:   $('lcd-message').value.trim(),
+  is_active: $('lcd-active').value === '1',
+}), '/api/lcd', '✓ LCD added', loadLCD);
+
+_editCrud.lcd = {
+  url: '/api/lcd', title: 'Edit LCD Display', reload: () => loadLCD(),
+  fields: [{ k: 'name', label: 'Screen Name' }, { k: 'location', label: 'Location' },
+           { k: 'message', label: 'Message' }],
+};
+_exportCfg.lcd = {
+  loader: 'lcd', name: 'lcd-screens',
+  cols: [['name', 'Screen Name'], ['location', 'Location'], ['message', 'Message'],
+         ['status', 'Status'], ['created_at', 'Created']],
+};
+_liveLoaders.lcd = loadLCD;
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'lcd') {
+    btn.addEventListener('click', () => setTimeout(loadLCD, 30));
+  }
+});
+$('lcd-search')?.addEventListener('input', loadLCD);
+// Re-inject table-actions so the new lcd-table picks up Refresh + 📥 CSV.
+_injectTableActions();
+
+// ── Batch Delete on CRUD tables (deletes all currently-filtered rows) ────────
+// PDF p20 etc. show a "Batch delete" button alongside Add. This implementation
+// deletes all rows currently in the paginator's row set (i.e. everything
+// matching the active filter). Confirms with a count first.
+const _batchable = {
+  acc:    '/api/accounts',
+  rl:     '/api/roles',
+  dc:     '/api/dictionary',
+  yard:   '/api/yards',
+  region: '/api/regions',
+  vis:    '/api/visitors',
+  lcd:    '/api/lcd',
+};
+
+async function batchDelete(key) {
+  const url = _batchable[key]; if (!url) return;
+  const rows = _pager[key]?.rows || [];
+  if (!rows.length) { toast('Nothing to delete', 'err'); return; }
+  if (!confirm(`Delete all ${rows.length} currently-filtered row(s)? This cannot be undone.`)) return;
+  let ok = 0;
+  for (const r of rows) {
+    try {
+      const res = await fetch(`${url}/${r.id}`, { method: 'DELETE' });
+      if (res.ok) ok++;
+    } catch (e) { /* skip */ }
+  }
+  toast(`✓ Deleted ${ok} of ${rows.length} row(s)`, ok ? 'ok' : 'err');
+  _liveLoaders[_exportCfg[key]?.loader]?.();
+}
+
+// Append a 🗑 Batch button to each batchable table's existing action group.
+function _injectBatchButtons() {
+  Object.keys(_batchable).forEach(key => {
+    const tbl = document.getElementById(`${key}-table`); if (!tbl) return;
+    const actions = tbl.closest('.panel')?.querySelector('.table-actions');
+    if (!actions || actions.querySelector('[data-batch-key]')) return;
+    const btn = document.createElement('button');
+    btn.className = 'ghost-button';
+    btn.dataset.batchKey = key;
+    btn.title = 'Delete all currently-filtered rows';
+    btn.style.color = '#b74a42';
+    btn.textContent = '🗑 Batch';
+    actions.appendChild(btn);
+  });
+}
+_injectBatchButtons();
+
+document.addEventListener('click', (e) => {
+  const bd = e.target.closest && e.target.closest('[data-batch-key]');
+  if (bd) batchDelete(bd.dataset.batchKey);
+});

@@ -1520,9 +1520,33 @@
             </div>
           </section>
         </section>
-        <section id="lcd" class="view"><div class="stub-panel panel"><div class="stub-ico">🖥️</div>
-          <h2>LCD Display</h2><p>Configure entry/exit LED display messages and screens.</p>
-          <p class="stub-note">LED/LCD display config talks to on-site TCP/IP display hardware — a later-phase integration.</p></div></section>
+        <!-- LCD Display Management — live CRUD from /api/lcd -->
+        <section id="lcd" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add LCD Display</h2></div>
+            <form id="lcd-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(4,1fr); gap:12px; align-items:end;">
+              <label>Screen Name *<input type="text" id="lcd-name" required placeholder="Entry Gate LCD"></label>
+              <label>Location<input type="text" id="lcd-location" placeholder="Entry Gate A"></label>
+              <label>Message<input type="text" id="lcd-message" placeholder="Welcome to VayAccess"></label>
+              <label>Status
+                <select id="lcd-active"><option value="1">Active</option><option value="0">Inactive</option></select>
+              </label>
+              <div style="grid-column:1/-1;"><button type="submit" id="lcd-submit">+ Add Screen</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>LCD Displays</h2><span class="hint" id="lcd-meta">Loading…</span></div>
+              <input type="text" id="lcd-search" placeholder="Search screen / location…" style="margin:0; min-width:220px;">
+            </div>
+            <div class="table-wrap">
+              <table id="lcd-table">
+                <thead><tr><th>Screen Name</th><th>Location</th><th>Message</th><th>Status</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="lcd-body"><tr><td colspan="6" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
         <section id="menu-mgmt" class="view"><div class="stub-panel panel"><div class="stub-ico">📋</div>
           <h2>Menu Management</h2><p>Configure which sidebar menus each role can see.</p>
           <p class="stub-note">Menu visibility ties into Role Permission (below) — built together in the RBAC chunk.</p></div></section>

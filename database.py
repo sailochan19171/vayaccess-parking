@@ -416,3 +416,24 @@ class DictionaryEntry(db.Model):
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
         }
 
+
+class LCDScreen(db.Model):
+    __tablename__ = 'lcd_screens'
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(120), nullable=False)
+    location    = db.Column(db.String(200), nullable=True)
+    message     = db.Column(db.String(500), nullable=True)
+    is_active   = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":         self.id,
+            "name":       self.name,
+            "location":   self.location or "",
+            "message":    self.message or "",
+            "is_active":  bool(self.is_active),
+            "status":     "Active" if self.is_active else "Inactive",
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+

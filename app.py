@@ -16,7 +16,7 @@ if not CLOUD_MODE:
 from flask import Flask, render_template, request, jsonify, Response
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
-                      Account, Role, DictionaryEntry, migrate_schema)
+                      Account, Role, DictionaryEntry, LCDScreen, migrate_schema)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -2714,6 +2714,54 @@ def api_dictionary_delete(did):
         return jsonify({"status": "error", "message": "not found"}), 404
     db.session.delete(row); db.session.commit()
     AuditEvent.log(f"Dictionary entry removed: {row.category}/{row.dict_key}", area='System')
+    return jsonify({"status": "ok"})
+
+
+# ── System Management: LCD screens (entry/exit displays) ─────────────────────
+@app.route('/api/lcd', methods=['GET', 'POST'])
+def api_lcd():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Screen name is required"}), 400
+        db.session.add(LCDScreen(
+            name=name,
+            location=(data.get('location') or '').strip() or None,
+            message=(data.get('message') or '').strip() or None,
+            is_active=bool(data.get('is_active', True)),
+        ))
+        db.session.commit()
+        AuditEvent.log(f"LCD added: {name}", area='System')
+        return jsonify({"status": "ok"})
+    return jsonify([s.to_dict() for s in LCDScreen.query.order_by(LCDScreen.name).all()])
+
+
+@app.route('/api/lcd/<int:sid>', methods=['PUT'])
+def api_lcd_update(sid):
+    row = LCDScreen.query.get(sid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    d = request.json or {}
+    if 'name' in d:
+        nm = (d.get('name') or '').strip()
+        if not nm: return jsonify({"status": "error", "message": "Screen name required"}), 400
+        row.name = nm
+    if 'location'  in d: row.location  = (d.get('location') or '').strip() or None
+    if 'message'   in d: row.message   = (d.get('message') or '').strip() or None
+    if 'is_active' in d: row.is_active = bool(d.get('is_active'))
+    db.session.commit()
+    AuditEvent.log(f"LCD updated: {row.name}", area='System')
+    return jsonify({"status": "ok", "lcd": row.to_dict()})
+
+
+@app.route('/api/lcd/<int:sid>', methods=['DELETE'])
+def api_lcd_delete(sid):
+    row = LCDScreen.query.get(sid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    db.session.delete(row); db.session.commit()
+    AuditEvent.log(f"LCD removed: {row.name}", area='System')
     return jsonify({"status": "ok"})
 
 
