@@ -2091,9 +2091,13 @@ async function loadRegisteredVehicles() {
         <td>${pay}</td>
         <td>${_esc(e.valid_until) || '—'}</td>
         <td>${badge}</td>
+        <td><button class="ghost-button" data-qr data-qr-kind="member" data-qr-id="${e.id}"
+            data-qr-title="Member Pass — ${_esc(e.owner_name) || ''}"
+            data-qr-meta="<b>${_esc(e.owner_name) || '—'}</b><br>Plate: ${plate}<br>Tag: ${_esc(e.rfid_tag) || '—'}<br>Dept: ${_esc(e.department) || '—'}<br>Valid until: ${_esc(e.valid_until) || '—'}"
+            style="padding:4px 10px; font-size:0.8em;">QR</button></td>
       </tr>`;
-    }, 8);
-  } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
+    }, 9);
+  } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
 }
 
 async function loadBlacklistView() {
@@ -2302,9 +2306,13 @@ async function loadMembership() {
         <td>₹${e.payment_amount || 0}</td>
         <td>${_esc(e.valid_until) || '—'}</td>
         <td>${badge}</td>
+        <td><button class="ghost-button" data-qr data-qr-kind="member" data-qr-id="${e.id}"
+            data-qr-title="Member Pass — ${_esc(e.owner_name) || ''}"
+            data-qr-meta="<b>${_esc(e.owner_name) || '—'}</b><br>Plate: ${_esc(e.number_plate) || '—'}<br>Tag: ${_esc(e.rfid_tag) || '—'}<br>Dept: ${_esc(e.department) || '—'}<br>Valid until: ${_esc(e.valid_until) || '—'}"
+            style="padding:4px 10px; font-size:0.8em;">QR</button></td>
       </tr>`;
-    }, 8);
-  } catch (e) { tb.innerHTML = _emptyRow(8, 'Failed to load.'); }
+    }, 9);
+  } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
 }
 
 async function loadTypes() {
@@ -2344,7 +2352,11 @@ async function loadVisitorsView() {
         <td>${_esc(v.start_at) || '—'}</td>
         <td>${_esc(v.end_at) || '—'}</td>
         <td><span class="scan-status-badge ${badge}">${_esc(v.status) || '—'}</span></td>
-        <td><button class="ghost-button" data-edit="${v.id}" data-edit-sec="vis" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button vis-del" data-id="${v.id}"
+        <td>
+          <button class="ghost-button" data-qr data-qr-kind="visitor" data-qr-id="${v.id}"
+                  data-qr-title="Visitor Pass — ${_esc(v.name)}"
+                  data-qr-meta="<b>${_esc(v.name)}</b><br>Plate: ${_esc(v.number_plate) || '—'}<br>Host: ${_esc(v.host_employee) || '—'}<br>Valid: ${_esc(v.start_at) || '—'} → ${_esc(v.end_at) || '—'}"
+                  style="padding:4px 10px; font-size:0.8em; margin-right:4px;">QR</button><button class="ghost-button" data-edit="${v.id}" data-edit-sec="vis" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button vis-del" data-id="${v.id}"
                style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
       </tr>`;
     }, 9, (tb) => {
@@ -2790,3 +2802,45 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
 });
 // Load once on page load so the dashboard (default view) populates immediately.
 loadHomeSummary();
+
+// ── Phase 9: QR pass modal (Visitor + Member passes) ─────────────────────────
+function openQrModal(kind, id, title, meta) {
+  if (!$('qr-modal')) return;
+  const url = kind === 'visitor' ? `/api/visitors/${id}/qr` : `/api/employees/${id}/qr`;
+  $('qr-modal-title').textContent = title || 'Pass QR Code';
+  $('qr-modal-img').src = url + '?t=' + Date.now();
+  $('qr-modal-meta').innerHTML = meta || '';
+  $('qr-modal').style.display = 'flex';
+}
+function closeQrModal() { const m = $('qr-modal'); if (m) m.style.display = 'none'; }
+$('qr-modal-x')?.addEventListener('click', closeQrModal);
+$('qr-modal-close')?.addEventListener('click', closeQrModal);
+$('qr-modal')?.addEventListener('click', (e) => { if (e.target.id === 'qr-modal') closeQrModal(); });
+
+// Print: open a tiny window with just the QR + meta and trigger window.print().
+$('qr-modal-print')?.addEventListener('click', () => {
+  const img = $('qr-modal-img').src;
+  const title = $('qr-modal-title').textContent;
+  const meta = $('qr-modal-meta').innerHTML;
+  const w = window.open('', '_blank', 'width=420,height=620');
+  if (!w) { toast('✗ Pop-up blocked — allow pop-ups to print', 'err'); return; }
+  w.document.write(`<!doctype html><html><head><title>${title}</title>
+    <style>body{font-family:'Inter',sans-serif;text-align:center;padding:24px;color:#1f2a3d;}
+    h2{margin:0 0 16px;font-size:18px;}
+    img{width:280px;height:280px;background:#fff;border:1px solid #e5e9ef;border-radius:8px;padding:8px;}
+    .meta{margin-top:14px;font-size:13px;line-height:1.6;}
+    @media print{button{display:none;}}</style></head>
+    <body onload="setTimeout(()=>window.print(),250);">
+    <h2>${title}</h2><img src="${img}"><div class="meta">${meta}</div></body></html>`);
+  w.document.close();
+});
+
+// Delegated [data-qr] click: data-qr="visitor:42:Display Title:meta html" or
+// data-qr="member:7:Member Name:meta html". Colons in title/meta are escaped
+// by the rowFn (the meta uses _esc + we encode the title plain).
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-qr]');
+  if (!b) return;
+  // data-qr-kind, data-qr-id, data-qr-title, data-qr-meta (separate attrs avoid escaping pain)
+  openQrModal(b.dataset.qrKind, b.dataset.qrId, b.dataset.qrTitle, b.dataset.qrMeta);
+});

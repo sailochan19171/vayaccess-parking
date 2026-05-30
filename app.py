@@ -2817,6 +2817,68 @@ def api_regions_update(rid):
     return jsonify({"status": "ok", "region": row.to_dict()})
 
 
+# ── QR codes for visitor / member passes ─────────────────────────────────────
+# Encodes the pass details as JSON inside the QR. Operators can scan at the
+# gate to verify. The qrcode library is optional — endpoints return 503 if
+# it isn't installed (e.g. on a local dev env that hasn't pip-installed it).
+try:
+    import qrcode as _qrcode
+    from io import BytesIO as _QrBytesIO
+    _QR_AVAILABLE = True
+except ImportError:
+    _QR_AVAILABLE = False
+
+
+def _make_qr_png(payload_dict):
+    img = _qrcode.make(json.dumps(payload_dict, separators=(',', ':')),
+                       box_size=10, border=2)
+    buf = _QrBytesIO()
+    img.save(buf, format='PNG')
+    return buf.getvalue()
+
+
+@app.route('/api/visitors/<int:vid>/qr')
+def api_visitor_qr(vid):
+    if not _QR_AVAILABLE:
+        return jsonify({"status": "error",
+                        "message": "QR support not installed (qrcode lib missing)"}), 503
+    v = Visitor.query.get(vid)
+    if not v:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    png = _make_qr_png({
+        "type":       "visitor",
+        "id":         v.id,
+        "name":       v.name,
+        "plate":      v.number_plate or "",
+        "host":       v.host_employee or "",
+        "valid_from": v.start_at.strftime("%Y-%m-%d %H:%M") if v.start_at else "",
+        "valid_to":   v.end_at.strftime("%Y-%m-%d %H:%M") if v.end_at else "",
+    })
+    return Response(png, mimetype='image/png',
+                    headers={'Cache-Control': 'no-store'})
+
+
+@app.route('/api/employees/<int:eid>/qr')
+def api_employee_qr(eid):
+    if not _QR_AVAILABLE:
+        return jsonify({"status": "error",
+                        "message": "QR support not installed (qrcode lib missing)"}), 503
+    w = Whitelist.query.get(eid)
+    if not w:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    png = _make_qr_png({
+        "type":        "member",
+        "id":          w.id,
+        "name":        w.owner_name or "",
+        "plate":       w.number_plate or "",
+        "rfid_tag":    w.rfid_tag or "",
+        "department":  w.department or "",
+        "valid_until": w.valid_until.strftime("%Y-%m-%d") if w.valid_until else "",
+    })
+    return Response(png, mimetype='image/png',
+                    headers={'Cache-Control': 'no-store'})
+
+
 # ── Home Page summary (PDF page 5 layout) ────────────────────────────────────
 # Powers the 4 gradient metric cards + grouped entry/exit bar chart + the
 # Income Statistics donut. Aggregated over the last 8 days so the daily bars

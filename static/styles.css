@@ -1128,6 +1128,32 @@ td, th, .epc, code, .scan-row dd,
   margin-top: 8px;
 }
 
+/* QR pass modal (Visitor / Member). Reuses .edit-modal frame, adds a QR
+   image and meta block. */
+.qr-modal { max-width: 380px; }
+.qr-modal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 16px;
+}
+.qr-modal-body img {
+  width: 240px;
+  height: 240px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.qr-modal-meta {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+.qr-modal-meta b { color: var(--primary); }
+
 /* ──────────────────────────────────────────────────────────────────────
    Monitoring Center (PDF page 4). Dark dual-camera layout — kept self-
    contained so the SaaS-light theme on every other page is unaffected.
