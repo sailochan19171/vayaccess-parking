@@ -1065,6 +1065,33 @@ td, th, .epc, code, .scan-row dd,
   scrollbar-width: thin;
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+   UNIVERSAL data-table alignment. Every table inside a .table-wrap (which
+   already scrolls horizontally) gets nowrap on its cells, so columns stay
+   one-line and headers never split mid-word (e.g. "HOST" → "HOS T"). When
+   total column width exceeds the panel, the wrap scrolls horizontally
+   instead of crushing columns. Works for ANY number of columns in ANY
+   section — past, present, and future tables.
+   ────────────────────────────────────────────────────────────────────── */
+.table-wrap > table {
+  width: max-content;   /* size to content, then .table-wrap scrolls */
+  min-width: 100%;      /* but at least fill the wrap when there's space  */
+}
+.table-wrap > table th,
+.table-wrap > table td {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* Compact action buttons inside table rows (Edit/Delete/QR/etc.) — the
+   global button min-height 42px is way too tall for inline row actions. */
+.table-wrap > table td button {
+  min-height: 28px;
+  line-height: 1;
+}
+/* The single-line constraint on headers + first-cell breathing room so
+   things never look cramped. */
+.table-wrap > table thead th { padding: 10px 14px; font-size: 0.74rem; }
+
 /* Reusable table paginator (injected by paginate() after each .table-wrap). */
 .tbl-paginator {
   display: flex;
