@@ -25,6 +25,7 @@ function switchView(name) {
     account: 'Account Management',   lcd: 'LCD Display',
     'menu-mgmt': 'Menu Management',  role: 'Role Management',
     'role-perm': 'Role Permission',  dictionary: 'Dictionary Managed',
+    'audit-log': 'Audit Log',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
 }
@@ -2111,7 +2112,10 @@ async function loadRegisteredVehicles() {
         <td><button class="ghost-button" data-qr data-qr-kind="member" data-qr-id="${e.id}"
             data-qr-title="Member Pass — ${_esc(e.owner_name) || ''}"
             data-qr-meta="<b>${_esc(e.owner_name) || '—'}</b><br>Plate: ${plate}<br>Tag: ${_esc(e.rfid_tag) || '—'}<br>Dept: ${_esc(e.department) || '—'}<br>Valid until: ${_esc(e.valid_until) || '—'}"
-            style="padding:4px 10px; font-size:0.8em;">QR</button></td>
+            style="padding:4px 10px; font-size:0.8em; margin-right:4px;">QR</button><button class="ghost-button" data-wa data-wa-kind="m" data-wa-id="${e.id}"
+            data-wa-phone="${_esc((e.contact_number||'').replace(/\\D/g,''))}"
+            data-wa-name="${_esc(e.owner_name) || ''}"
+            style="padding:4px 10px; font-size:0.8em; background:#25d366; color:#fff; border-color:#1ea152;">WhatsApp</button></td>
       </tr>`;
     }, 9);
   } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
@@ -2373,6 +2377,12 @@ function _csvEscape(v) {
   if (typeof v === 'number' && v > 1_000_000_000_000) {
     try { s = new Date(v).toISOString().replace('T', ' ').slice(0, 19); } catch (e) {}
   }
+  // Excel auto-formats date-looking strings into a date type that shows as
+  // ##### whenever the column is too narrow. Force text rendering via the
+  // ="…" formula trick so dates ALWAYS display in full regardless of width.
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    return `="${s.replace(/"/g, '""')}"`;
+  }
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -2382,7 +2392,9 @@ function exportTableCSV(key) {
   if (!rows.length) { toast('Nothing to export', 'err'); return; }
   const header = cfg.cols.map(c => c[1]).join(',');
   const body = rows.map(r => cfg.cols.map(([k]) => _csvEscape(r[k])).join(',')).join('\n');
-  const blob = new Blob([header + '\n' + body], { type: 'text/csv;charset=utf-8;' });
+  // UTF-8 BOM (﻿) so Excel opens the CSV with the right encoding instead
+  // of mojibake-ing rupee signs and Indian script.
+  const blob = new Blob(['﻿', header + '\n' + body], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `${cfg.name}-${new Date().toISOString().slice(0,10)}.csv`;
@@ -2484,7 +2496,10 @@ async function loadMembership() {
         <td><button class="ghost-button" data-qr data-qr-kind="member" data-qr-id="${e.id}"
             data-qr-title="Member Pass — ${_esc(e.owner_name) || ''}"
             data-qr-meta="<b>${_esc(e.owner_name) || '—'}</b><br>Plate: ${_esc(e.number_plate) || '—'}<br>Tag: ${_esc(e.rfid_tag) || '—'}<br>Dept: ${_esc(e.department) || '—'}<br>Valid until: ${_esc(e.valid_until) || '—'}"
-            style="padding:4px 10px; font-size:0.8em;">QR</button></td>
+            style="padding:4px 10px; font-size:0.8em; margin-right:4px;">QR</button><button class="ghost-button" data-wa data-wa-kind="m" data-wa-id="${e.id}"
+            data-wa-phone="${_esc((e.contact_number||'').replace(/\\D/g,''))}"
+            data-wa-name="${_esc(e.owner_name) || ''}"
+            style="padding:4px 10px; font-size:0.8em; background:#25d366; color:#fff; border-color:#1ea152;">WhatsApp</button></td>
       </tr>`;
     }, 9);
   } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
@@ -2531,7 +2546,10 @@ async function loadVisitorsView() {
           <button class="ghost-button" data-qr data-qr-kind="visitor" data-qr-id="${v.id}"
                   data-qr-title="Visitor Pass — ${_esc(v.name)}"
                   data-qr-meta="<b>${_esc(v.name)}</b><br>Plate: ${_esc(v.number_plate) || '—'}<br>Host: ${_esc(v.host_employee) || '—'}<br>Valid: ${_esc(v.start_at) || '—'} → ${_esc(v.end_at) || '—'}"
-                  style="padding:4px 10px; font-size:0.8em; margin-right:4px;">QR</button><button class="ghost-button" data-edit="${v.id}" data-edit-sec="vis" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button vis-del" data-id="${v.id}"
+                  style="padding:4px 10px; font-size:0.8em; margin-right:4px;">QR</button><button class="ghost-button" data-wa data-wa-kind="v" data-wa-id="${v.id}"
+                  data-wa-phone="${_esc((v.contact||'').replace(/\\D/g,''))}"
+                  data-wa-name="${_esc(v.name)}"
+                  style="padding:4px 10px; font-size:0.8em; margin-right:4px; background:#25d366; color:#fff; border-color:#1ea152;">WhatsApp</button><button class="ghost-button" data-edit="${v.id}" data-edit-sec="vis" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button vis-del" data-id="${v.id}"
                style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
       </tr>`;
     }, 9, (tb) => {
@@ -3020,6 +3038,32 @@ document.addEventListener('click', (e) => {
   openQrModal(b.dataset.qrKind, b.dataset.qrId, b.dataset.qrTitle, b.dataset.qrMeta);
 });
 
+// ── WhatsApp share for Visitor + Member passes ───────────────────────────────
+// Click WhatsApp button -> fetch the pass URL from the server (same URL the QR
+// encodes) and open wa.me with a pre-filled message. If the row had a contact
+// phone we prefill the recipient; otherwise the operator picks from contacts.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-wa]');
+  if (!b) return;
+  const kind  = b.dataset.waKind;
+  const id    = b.dataset.waId;
+  const name  = b.dataset.waName || '';
+  const phone = (b.dataset.waPhone || '').replace(/[^0-9]/g, '');
+  fetch(`/api/${kind === 'v' ? 'visitors' : 'employees'}/${id}/pass_url`, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(js => {
+      const url = js.url;
+      if (!url) { toast('✗ Could not generate pass URL', 'err'); return; }
+      const text = kind === 'v'
+        ? `Hi ${name},\n\nYour VayAccess visitor pass:\n${url}\n\nOpen this link on your phone to view your QR code. Show it at the gate.`
+        : `Hi ${name},\n\nYour VayAccess member pass:\n${url}\n\nOpen this link on your phone any time to verify your membership.`;
+      // Default to India country code if a 10-digit local number was stored.
+      const num = phone ? (phone.length === 10 ? '91' + phone : phone) : '';
+      window.open(`https://wa.me/${num}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+    })
+    .catch(() => toast('✗ Network error', 'err'));
+});
+
 // ── Phase 11: LCD Display CRUD + Batch Delete on CRUD tables ─────────────────
 async function loadLCD() {
   const tb = $('lcd-body'); if (!tb) return;
@@ -3233,4 +3277,125 @@ $('rpt-monthly-pdf')?.addEventListener('click', () => {
   a.download = `VayAccess-Report-${m}.pdf`;
   document.body.appendChild(a); a.click(); a.remove();
   toast('📄 Generating monthly report…', 'ok');
+});
+
+// ── Phase 14: Audit Log viewer + Bulk CSV import (visitors + members) ───────
+async function loadAuditLog() {
+  const tb = $('al-body'); if (!tb) return;
+  try {
+    const raw = await (await fetch('/api/audit', { cache: 'no-store' })).json();
+    const all = Array.isArray(raw) ? raw : [];
+    const q = ($('al-search')?.value || '').trim().toUpperCase();
+    const rows = all.filter(e => !q || (e.area || '').toUpperCase().includes(q) || (e.message || '').toUpperCase().includes(q));
+    if ($('al-meta')) $('al-meta').textContent = `${rows.length} of ${all.length} event(s)`;
+    paginate('al', rows.map(r => ({
+      ...r,
+      when_str: r.at ? new Date(r.at).toLocaleString() : '—',
+    })), 'al-body', a => `<tr>
+      <td>${_esc(a.when_str)}</td>
+      <td><span class="scan-status-badge ${/admin|system/i.test(a.area || '') ? 'scanning' : 'granted'}">${_esc(a.area) || '—'}</span></td>
+      <td>${_esc(a.message)}</td>
+    </tr>`, 3);
+  } catch (e) { tb.innerHTML = _emptyRow(3, 'Failed to load.'); }
+}
+
+_exportCfg.al = { loader: 'audit-log', name: 'audit-log',
+  cols: [['when_str', 'When'], ['area', 'Area'], ['message', 'Message']] };
+_liveLoaders['audit-log'] = loadAuditLog;
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'audit-log') {
+    btn.addEventListener('click', () => setTimeout(loadAuditLog, 30));
+  }
+});
+$('al-search')?.addEventListener('input', loadAuditLog);
+_injectTableActions();
+
+// ── Bulk CSV import (Visitors + Members) ────────────────────────────────────
+// Injects a "📤 Import" button next to Refresh/CSV/Batch on importable tables.
+// Click opens a file picker, parses CSV client-side (tolerant of headers in
+// any order), POSTs the rows to the matching bulk endpoint.
+const _bulkImportable = {
+  vis: { url: '/api/bulk_import/visitors', loader: 'visitors',
+         template: 'name,number_plate,contact,purpose,host_employee\n"John Doe","TS09AB1234","9876543210","Meeting","Satya"' },
+  mm:  { url: '/api/bulk_import/members',  loader: 'membership',
+         template: 'owner_name,number_plate,rfid_tag,department,contact_number,vehicle_type,activation_months\n"John Doe","TS09AB1234","E2806894...","Engineering","9876543210","Car",12' },
+};
+
+function _parseCSV(text) {
+  // Tiny CSV parser (handles quoted fields + commas inside quotes).
+  const lines = text.replace(/\r\n/g, '\n').split('\n').filter(l => l.trim());
+  if (!lines.length) return [];
+  const parseLine = (l) => {
+    const out = []; let cur = '', inQ = false;
+    for (let i = 0; i < l.length; i++) {
+      const c = l[i];
+      if (inQ) {
+        if (c === '"' && l[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { inQ = false; }
+        else cur += c;
+      } else {
+        if (c === '"') inQ = true;
+        else if (c === ',') { out.push(cur); cur = ''; }
+        else cur += c;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+  const header = parseLine(lines[0]).map(h => h.trim());
+  return lines.slice(1).map(l => {
+    const cells = parseLine(l);
+    const row = {};
+    header.forEach((h, i) => { row[h] = (cells[i] || '').trim(); });
+    return row;
+  });
+}
+
+function bulkImport(key) {
+  const cfg = _bulkImportable[key]; if (!cfg) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv,text/csv';
+  input.onchange = async () => {
+    const file = input.files && input.files[0]; if (!file) return;
+    try {
+      const text = await file.text();
+      const rows = _parseCSV(text);
+      if (!rows.length) { toast('CSV is empty', 'err'); return; }
+      if (!confirm(`Import ${rows.length} row(s) from "${file.name}"?`)) return;
+      toast(`📤 Importing ${rows.length} row(s)…`, 'ok');
+      const r = await fetch(cfg.url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      });
+      const js = await r.json();
+      if (r.ok && js.status === 'ok') {
+        toast(`✓ Imported ${js.imported}, skipped ${js.skipped}`, 'ok');
+        _liveLoaders[cfg.loader]?.();
+      } else {
+        toast('✗ ' + (js.message || 'Import failed'), 'err');
+      }
+    } catch (e) { toast('✗ Could not read CSV', 'err'); }
+  };
+  input.click();
+}
+
+function _injectImportButtons() {
+  Object.keys(_bulkImportable).forEach(key => {
+    const tbl = document.getElementById(`${key}-table`); if (!tbl) return;
+    const actions = tbl.closest('.panel')?.querySelector('.table-actions');
+    if (!actions || actions.querySelector('[data-bulk-key]')) return;
+    const btn = document.createElement('button');
+    btn.className = 'ghost-button';
+    btn.dataset.bulkKey = key;
+    btn.title = 'Bulk import from CSV';
+    btn.textContent = '📤 Import';
+    actions.appendChild(btn);
+  });
+}
+_injectImportButtons();
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-bulk-key]');
+  if (b) bulkImport(b.dataset.bulkKey);
 });

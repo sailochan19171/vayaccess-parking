@@ -3119,6 +3119,102 @@ def api_visitor_qr(vid):
                     headers={'Cache-Control': 'no-store'})
 
 
+# Tiny URL accessor used by the WhatsApp share button on each row.
+@app.route('/api/visitors/<int:vid>/pass_url')
+def api_visitor_pass_url(vid):
+    v = Visitor.query.get(vid)
+    if not v:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    return jsonify({"url": _build_pass_url(_make_pass_token('v', v.id))})
+
+
+@app.route('/api/employees/<int:eid>/pass_url')
+def api_employee_pass_url(eid):
+    w = Whitelist.query.get(eid)
+    if not w:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    return jsonify({"url": _build_pass_url(_make_pass_token('m', w.id))})
+
+
+# ── Bulk CSV import for Visitors + Members ───────────────────────────────────
+# Accepts an array of row dicts (parsed client-side from a CSV file). Each row
+# becomes a new Visitor / Whitelist entry. Returns counts of imported / skipped.
+@app.route('/api/bulk_import/visitors', methods=['POST'])
+def api_bulk_import_visitors():
+    rows = (request.json or {}).get('rows') or []
+    ok = err = 0
+    now = datetime.now()
+    for r in rows:
+        name = (r.get('name') or r.get('Name') or '').strip()
+        if not name:
+            err += 1; continue
+        # Optional valid_from/valid_to from CSV; otherwise default to now + 8h.
+        try:
+            start_at = datetime.strptime(r['valid_from'], '%Y-%m-%d %H:%M') if r.get('valid_from') else now
+        except Exception:
+            start_at = now
+        try:
+            end_at = datetime.strptime(r['valid_to'], '%Y-%m-%d %H:%M') if r.get('valid_to') else (now + timedelta(hours=8))
+        except Exception:
+            end_at = now + timedelta(hours=8)
+        try:
+            db.session.add(Visitor(
+                name=name,
+                number_plate=(r.get('number_plate') or r.get('plate') or r.get('Plate') or '').strip().upper() or None,
+                contact=(r.get('contact') or r.get('Contact') or '').strip() or None,
+                purpose=(r.get('purpose') or r.get('Purpose') or '').strip() or None,
+                host_employee=(r.get('host_employee') or r.get('host') or r.get('Host') or '').strip() or None,
+                start_at=start_at,
+                end_at=end_at,
+            ))
+            ok += 1
+        except Exception:
+            err += 1
+    db.session.commit()
+    AuditEvent.log(f"Bulk imported {ok} visitor(s) ({err} skipped)", area='Admin')
+    return jsonify({"status": "ok", "imported": ok, "skipped": err})
+
+
+@app.route('/api/bulk_import/members', methods=['POST'])
+def api_bulk_import_members():
+    """Bulk-create Whitelist rows. Each row needs at minimum: owner_name + plate.
+    Payment / activation defaults are set so the rows pass the existing
+    not-null constraints; operator can edit specifics after import."""
+    rows = (request.json or {}).get('rows') or []
+    ok = err = 0
+    from dateutil.relativedelta import relativedelta
+    now = datetime.now()
+    for r in rows:
+        name  = (r.get('owner_name') or r.get('name') or r.get('Name') or '').strip()
+        plate = (r.get('number_plate') or r.get('plate') or r.get('Plate') or '').strip().upper()
+        if not name or not plate:
+            err += 1; continue
+        try:
+            months = int(r.get('activation_months') or r.get('months') or 12)
+        except Exception:
+            months = 12
+        try:
+            db.session.add(Whitelist(
+                owner_name=name,
+                number_plate=plate,
+                rfid_tag=(r.get('rfid_tag') or r.get('tag') or '').strip().upper() or None,
+                department=(r.get('department') or r.get('Department') or '').strip() or None,
+                contact_number=(r.get('contact_number') or r.get('contact') or '').strip() or None,
+                vehicle_type=(r.get('vehicle_type') or r.get('type') or 'Car').strip() or 'Car',
+                activated_at=now,
+                activation_months=months,
+                valid_until=now + relativedelta(months=+months),
+                payment_method='Bulk Import',
+                payment_amount=int(r.get('payment_amount') or r.get('amount') or 0),
+            ))
+            ok += 1
+        except Exception:
+            err += 1
+    db.session.commit()
+    AuditEvent.log(f"Bulk imported {ok} member(s) ({err} skipped)", area='Admin')
+    return jsonify({"status": "ok", "imported": ok, "skipped": err})
+
+
 @app.route('/api/employees/<int:eid>/qr')
 def api_employee_qr(eid):
     if not _QR_AVAILABLE:
@@ -3172,6 +3268,26 @@ def pass_verify(token):
             return render_template('pass_verify.html', **ctx), 404
         # Member is valid if valid_until is today or later.
         is_valid = bool(row.valid_until and row.valid_until >= now)
+        # Recent gate scans for this member (member mobile self-service feature).
+        recent_q = AccessLog.query
+        if row.rfid_tag and row.number_plate:
+            recent_q = recent_q.filter(
+                (AccessLog.rfid_tag == row.rfid_tag) |
+                (AccessLog.number_plate == row.number_plate))
+        elif row.rfid_tag:
+            recent_q = recent_q.filter(AccessLog.rfid_tag == row.rfid_tag)
+        elif row.number_plate:
+            recent_q = recent_q.filter(AccessLog.number_plate == row.number_plate)
+        else:
+            recent_q = None
+        recent = []
+        if recent_q is not None:
+            for r in recent_q.order_by(AccessLog.timestamp.desc()).limit(5).all():
+                recent.append({
+                    "when":   r.timestamp.strftime("%Y-%m-%d %H:%M:%S") if r.timestamp else "—",
+                    "status": r.status or "—",
+                    "ok":     bool(r.status and "grant" in r.status.lower()),
+                })
         ctx["pass_"] = {
             "type":       "Member",
             "name":       row.owner_name or "—",
@@ -3185,6 +3301,7 @@ def pass_verify(token):
             "sub":        ("Active member — admit entry"
                            if is_valid else
                            "Membership has expired — DO NOT ADMIT"),
+            "recent":     recent,
         }
     return render_template('pass_verify.html', **ctx)
 

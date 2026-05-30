@@ -129,6 +129,20 @@
         <div class="pv-row"><span>Valid from</span><span>{{ pass_.valid_from }}</span></div>
         <div class="pv-row"><span>Valid to</span><span>{{ pass_.valid_to }}</span></div>
       </div>
+
+      {% if pass_.recent %}
+      <div class="pv-card" style="margin-top:14px;">
+        <div class="pv-type">Recent gate activity</div>
+        {% for r in pass_.recent %}
+          <div class="pv-row">
+            <span>{{ r.when }}</span>
+            <span style="color: {{ '#059669' if r.ok else '#b91c1c' }};">
+              {{ '✓ ' if r.ok else '✗ ' }}{{ r.status }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
     {% endif %}
 
     <div class="pv-foot">
