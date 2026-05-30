@@ -2027,8 +2027,25 @@ async function loadParkingRecords() {
   try {
     const r = await fetch('/api/transactions?limit=500', { cache: 'no-store' });
     const js = await r.json();
-    const q = ($('pr-search')?.value || '').trim().toUpperCase();
-    const rows = (Array.isArray(js) ? js : []).filter(t => !q || (t.vehicle || '').toUpperCase().includes(q));
+    // Multi-field Search Conditions: Plate / Vehicle Type / Match Status /
+    // Entry from / Entry to.
+    const plate = ($('pr-search')?.value || '').trim().toUpperCase();
+    const vty   = $('pr-type')?.value   || '';
+    const st    = $('pr-status')?.value || '';   // '' | 'parked' | 'exited'
+    const dFrom = $('pr-from')?.value || '';
+    const dTo   = $('pr-to')?.value   || '';
+    const rows = (Array.isArray(js) ? js : []).filter(t => {
+      if (plate && !(t.vehicle || '').toUpperCase().includes(plate)) return false;
+      if (vty   && t.type !== vty) return false;
+      if (st === 'parked' && !t.isActive) return false;
+      if (st === 'exited' &&  t.isActive) return false;
+      if ((dFrom || dTo) && t.entryAt) {
+        const day = new Date(t.entryAt).toISOString().slice(0, 10);
+        if (dFrom && day < dFrom) return false;
+        if (dTo   && day > dTo)   return false;
+      }
+      return true;
+    });
     if ($('pr-meta')) $('pr-meta').textContent = `${rows.length} record(s)`;
     paginate('pr', rows, 'pr-body', t => `<tr>
       <td style="font-family:monospace;">${_esc(t.vehicle) || '—'}</td>
@@ -2150,11 +2167,24 @@ async function loadOrders() {
   try {
     const r = await fetch('/api/orders', { cache: 'no-store' });
     const js = await r.json();
-    const q = ($('od-search')?.value || '').trim().toUpperCase();
-    const ty = $('od-type')?.value || '';
-    const rows = (Array.isArray(js) ? js : []).filter(o =>
-      (!ty || o.type === ty) &&
-      (!q || (o.order_no || '').toUpperCase().includes(q) || (o.plate || '').toUpperCase().includes(q)));
+    // Multi-field Search Conditions: Order Number / Type / Status / Plate /
+    // Start Time / End Time — each empty = no constraint.
+    const orderNo = ($('od-search')?.value || '').trim().toUpperCase();
+    const orderTy = $('od-type')?.value || '';
+    const orderSt = $('od-status')?.value || '';
+    const plate   = ($('od-plate')?.value || '').trim().toUpperCase();
+    const dFrom   = $('od-from')?.value || '';
+    const dTo     = $('od-to')?.value || '';
+    const rows = (Array.isArray(js) ? js : []).filter(o => {
+      if (orderNo && !(o.order_no || '').toUpperCase().includes(orderNo)) return false;
+      if (orderTy && o.type   !== orderTy) return false;
+      if (orderSt && o.status !== orderSt) return false;
+      if (plate   && !(o.plate || '').toUpperCase().includes(plate))   return false;
+      const day = (o.created_at || '').slice(0, 10);  // "yyyy-mm-dd"
+      if (dFrom && day && day < dFrom) return false;
+      if (dTo   && day && day > dTo)   return false;
+      return true;
+    });
     if ($('od-meta')) $('od-meta').textContent = `${rows.length} order(s)`;
     paginate('od', rows, 'od-body', o => `<tr>
       <td style="font-family:monospace; font-size:0.88em;">${_esc(o.order_no)}</td>
@@ -2281,6 +2311,26 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
 $('od-search')?.addEventListener('input', loadOrders);
 $('od-type')?.addEventListener('change', loadOrders);
 $('od-refresh')?.addEventListener('click', loadOrders);
+// Extra Search Conditions fields for Order Management (PDF p13 pattern).
+$('od-status')?.addEventListener('change', loadOrders);
+$('od-plate') ?.addEventListener('input',  loadOrders);
+$('od-from')  ?.addEventListener('change', loadOrders);
+$('od-to')    ?.addEventListener('change', loadOrders);
+$('od-reset') ?.addEventListener('click', () => {
+  ['od-status', 'od-type', 'od-search', 'od-plate', 'od-from', 'od-to']
+    .forEach(id => { const el = $(id); if (el) el.value = ''; });
+  loadOrders();
+});
+// Extra Search Conditions fields for Parking Records (PDF p8 pattern).
+$('pr-type')  ?.addEventListener('change', loadParkingRecords);
+$('pr-status')?.addEventListener('change', loadParkingRecords);
+$('pr-from')  ?.addEventListener('change', loadParkingRecords);
+$('pr-to')    ?.addEventListener('change', loadParkingRecords);
+$('pr-reset') ?.addEventListener('click', () => {
+  ['pr-search', 'pr-type', 'pr-status', 'pr-from', 'pr-to']
+    .forEach(id => { const el = $(id); if (el) el.value = ''; });
+  loadParkingRecords();
+});
 
 // ── Phase 4: Member sub-menu / Type / Visitors / Equipment / Settings ────────
 async function loadMembership() {

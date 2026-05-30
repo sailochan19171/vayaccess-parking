@@ -1106,17 +1106,47 @@
 
         <!-- Parking Records (Parking Inquiry) — live from /api/transactions -->
         <section id="parking-records" class="view">
-          <section class="panel">
-            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
-              <div>
-                <h2>Parking Records</h2>
-                <p class="hint" style="margin:2px 0 0;" id="pr-meta">Loading…</p>
-              </div>
-              <div style="display:flex; align-items:center; gap:8px;">
-                <input type="text" id="pr-search" placeholder="Search license plate…"
-                       style="margin:0; min-width:200px;">
+          <section class="panel search-conditions">
+            <div class="search-conditions-head">
+              <h3>Search Conditions</h3>
+              <div style="display:flex; gap:8px;">
+                <button class="ghost-button" id="pr-reset" type="button">Reset</button>
                 <button class="ghost-button" id="pr-refresh" type="button">↻ Refresh</button>
               </div>
+            </div>
+            <div class="search-conditions-grid">
+              <label>License Plate
+                <input type="text" id="pr-search" placeholder="e.g. TS08FH5796" style="text-transform:uppercase;">
+              </label>
+              <label>Vehicle Type
+                <select id="pr-type">
+                  <option value="">All types</option>
+                  <option value="Car">Car</option>
+                  <option value="Bike">Bike</option>
+                  <option value="Truck">Truck</option>
+                  <option value="Bus">Bus</option>
+                  <option value="EV">EV</option>
+                </select>
+              </label>
+              <label>Match Status
+                <select id="pr-status">
+                  <option value="">All</option>
+                  <option value="parked">Parked</option>
+                  <option value="exited">Exited</option>
+                </select>
+              </label>
+              <label>Entry from
+                <input type="date" id="pr-from">
+              </label>
+              <label>Entry to
+                <input type="date" id="pr-to">
+              </label>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Parking Records</h2>
+              <span class="hint" id="pr-meta">Loading…</span>
             </div>
             <div class="table-wrap">
               <table id="pr-table">
@@ -1162,22 +1192,48 @@
 
         <!-- Order Management — live from /api/orders (derived) -->
         <section id="orders" class="view">
-          <section class="panel">
-            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
-              <div>
-                <h2>Order Management</h2>
-                <p class="hint" style="margin:2px 0 0;" id="od-meta">Loading…</p>
+          <section class="panel search-conditions">
+            <div class="search-conditions-head">
+              <h3>Search Conditions</h3>
+              <div style="display:flex; gap:8px;">
+                <button class="ghost-button" id="od-reset" type="button">Reset</button>
+                <button class="ghost-button" id="od-refresh" type="button">↻ Refresh</button>
               </div>
-              <div style="display:flex; align-items:center; gap:8px;">
-                <input type="text" id="od-search" placeholder="Search order / plate…"
-                       style="margin:0; min-width:200px;">
-                <select id="od-type" style="margin:0;">
+            </div>
+            <div class="search-conditions-grid">
+              <label>Status
+                <select id="od-status">
+                  <option value="">All statuses</option>
+                  <option value="Paid">Paid</option>
+                  <option value="Free">Free</option>
+                  <option value="Unpaid Fee">Unpaid Fee</option>
+                </select>
+              </label>
+              <label>Order Type
+                <select id="od-type">
                   <option value="">All order types</option>
                   <option value="Temporary parking fee">Temporary parking fee</option>
                   <option value="memberPurchase">memberPurchase</option>
                 </select>
-                <button class="ghost-button" id="od-refresh" type="button">↻ Refresh</button>
-              </div>
+              </label>
+              <label>Order Number
+                <input type="text" id="od-search" placeholder="e.g. PK00000010">
+              </label>
+              <label>License Plate
+                <input type="text" id="od-plate" placeholder="e.g. TS08FH5796" style="text-transform:uppercase;">
+              </label>
+              <label>Start Time
+                <input type="date" id="od-from">
+              </label>
+              <label>End Time
+                <input type="date" id="od-to">
+              </label>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Order Management</h2>
+              <span class="hint" id="od-meta">Loading…</span>
             </div>
             <div class="table-wrap">
               <table id="od-table">

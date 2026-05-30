@@ -1154,6 +1154,40 @@ td, th, .epc, code, .scan-row dd,
 }
 .qr-modal-meta b { color: var(--primary); }
 
+/* "Search Conditions" panel — multi-field filter bar above PDF-pattern tables
+   (Order Management, Parking Records). */
+.search-conditions { margin-bottom: 14px; }
+.search-conditions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.search-conditions-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+.search-conditions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+.search-conditions-grid label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.search-conditions-grid label input,
+.search-conditions-grid label select {
+  margin-top: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  font-size: 0.92rem;
+}
+
 /* ──────────────────────────────────────────────────────────────────────
    Monitoring Center (PDF page 4). Dark dual-camera layout — kept self-
    contained so the SaaS-light theme on every other page is unaffected.
