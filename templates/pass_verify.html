@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>{% if pass_ %}{{ pass_.status }} · {{ pass_.name }}{% else %}Pass Verification{% endif %} · VayAccess</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(180deg, #f4f7fa 0%, #e8eef5 100%);
+      color: #1f2a3d;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .pv-wrap { max-width: 480px; margin: 0 auto; padding: 22px 18px 60px; }
+    .pv-brand {
+      text-align: center;
+      font-weight: 800;
+      font-size: 1.25rem;
+      letter-spacing: -0.3px;
+      color: #1f73d4;
+      margin-bottom: 18px;
+    }
+    .pv-brand small { display: block; color: #6b7280; font-weight: 500; font-size: 0.78rem; margin-top: 2px; letter-spacing: 0.5px; text-transform: uppercase; }
+
+    .pv-status {
+      padding: 36px 20px 30px;
+      border-radius: 16px;
+      text-align: center;
+      color: #fff;
+      margin-bottom: 18px;
+      box-shadow: 0 12px 32px rgba(15, 35, 70, 0.12);
+    }
+    .pv-status.valid   { background: linear-gradient(135deg, #34d399 0%, #10b981 60%, #059669 100%); }
+    .pv-status.invalid { background: linear-gradient(135deg, #fb7185 0%, #ef4444 60%, #b91c1c 100%); }
+    .pv-status-icon { font-size: 4rem; line-height: 1; margin-bottom: 10px; }
+    .pv-status-label { font-size: 2.2rem; font-weight: 900; letter-spacing: 3px; }
+    .pv-status-sub { font-size: 0.94rem; opacity: 0.95; margin-top: 8px; font-weight: 500; }
+
+    .pv-card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 20px 22px;
+      box-shadow: 0 8px 24px rgba(15, 35, 70, 0.08);
+    }
+    .pv-type {
+      color: #6b7280;
+      font-size: 0.74rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      margin-bottom: 4px;
+    }
+    .pv-name { font-size: 1.65rem; font-weight: 800; line-height: 1.1; margin-bottom: 12px; }
+    .pv-plate {
+      display: inline-block;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 1.15rem;
+      font-weight: 800;
+      background: #fef3c7;
+      color: #78350f;
+      padding: 6px 16px;
+      border-radius: 6px;
+      letter-spacing: 2px;
+      margin-bottom: 14px;
+      border: 1px solid #fcd34d;
+    }
+    .pv-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 0;
+      border-top: 1px solid #eef1f6;
+      font-size: 0.92rem;
+    }
+    .pv-row > span:first-child { color: #6b7280; font-weight: 600; flex-shrink: 0; }
+    .pv-row > span:last-child  { color: #1f2a3d; font-weight: 600; text-align: right; word-break: break-word; }
+
+    .pv-foot { text-align: center; margin-top: 22px; font-size: 0.78rem; color: #6b7280; line-height: 1.6; }
+    .pv-foot b { color: #1f73d4; }
+
+    .pv-error {
+      padding: 32px 22px;
+      text-align: center;
+      background: #fef2f2;
+      color: #991b1b;
+      border-radius: 14px;
+      font-weight: 700;
+      border: 1px solid #fecaca;
+    }
+    .pv-error-icon { font-size: 2.5rem; margin-bottom: 10px; }
+
+    @media (prefers-color-scheme: dark) {
+      body { background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%); color: #e2e8f0; }
+      .pv-card { background: #1e293b; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+      .pv-name { color: #f1f5f9; }
+      .pv-row { border-color: #334155; }
+      .pv-row > span:first-child { color: #94a3b8; }
+      .pv-row > span:last-child  { color: #e2e8f0; }
+      .pv-foot { color: #94a3b8; }
+      .pv-brand small { color: #94a3b8; }
+    }
+  </style>
+</head>
+<body>
+  <div class="pv-wrap">
+    <div class="pv-brand">VayAccess Systems<small>Pass Verification</small></div>
+
+    {% if error %}
+      <div class="pv-error">
+        <div class="pv-error-icon">⚠</div>
+        {{ error }}
+      </div>
+    {% else %}
+      <div class="pv-status {{ 'valid' if pass_.is_valid else 'invalid' }}">
+        <div class="pv-status-icon">{{ '🟢' if pass_.is_valid else '🔴' }}</div>
+        <div class="pv-status-label">{{ pass_.status }}</div>
+        <div class="pv-status-sub">{{ pass_.sub }}</div>
+      </div>
+
+      <div class="pv-card">
+        <div class="pv-type">{{ pass_.type }} Pass</div>
+        <div class="pv-name">{{ pass_.name }}</div>
+        {% if pass_.plate %}<div class="pv-plate">{{ pass_.plate }}</div>{% endif %}
+        {% if pass_.subline %}<div class="pv-row"><span>Details</span><span>{{ pass_.subline }}</span></div>{% endif %}
+        {% if pass_.purpose %}<div class="pv-row"><span>Purpose</span><span>{{ pass_.purpose }}</span></div>{% endif %}
+        <div class="pv-row"><span>Valid from</span><span>{{ pass_.valid_from }}</span></div>
+        <div class="pv-row"><span>Valid to</span><span>{{ pass_.valid_to }}</span></div>
+      </div>
+    {% endif %}
+
+    <div class="pv-foot">
+      Scanned at <b>{{ now }}</b><br>
+      VayAccess Systems · Smart Access for a Safer Future
+    </div>
+  </div>
+</body>
+</html>

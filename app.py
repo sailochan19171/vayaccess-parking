@@ -3053,12 +3053,54 @@ def api_monthly_pdf():
     })
 
 
-def _make_qr_png(payload_dict):
-    img = _qrcode.make(json.dumps(payload_dict, separators=(',', ':')),
-                       box_size=10, border=2)
+def _make_qr_png(payload):
+    """Generate a PNG of the QR encoding the given payload (str or dict)."""
+    text = payload if isinstance(payload, str) else json.dumps(payload, separators=(',', ':'))
+    img = _qrcode.make(text, box_size=10, border=2)
     buf = _QrBytesIO()
     img.save(buf, format='PNG')
     return buf.getvalue()
+
+
+# Token signing for pass-verification URLs.
+# Token format: <kind><id>-<sig>  where kind ∈ {v,m} and sig is the first 8
+# hex chars of HMAC-SHA256(secret, kind+id). Prevents trivial enumeration by
+# requiring the URL to be issued by us. Override the secret via PASS_SECRET
+# env var on Render (recommended in production).
+import hmac as _hmac
+import hashlib as _hashlib
+
+def _pass_secret():
+    return os.environ.get('PASS_SECRET',
+                          'vayaccess-default-pass-secret-2026-change-me').encode()
+
+def _make_pass_token(kind, row_id):
+    base = f"{kind}{row_id}"
+    sig  = _hmac.new(_pass_secret(), base.encode(), _hashlib.sha256).hexdigest()[:8]
+    return f"{base}-{sig}"
+
+def _verify_pass_token(token):
+    """Return (kind, id) tuple if token is valid, else None."""
+    if not token or '-' not in token:
+        return None
+    base, sig = token.rsplit('-', 1)
+    if not base or len(base) < 2:
+        return None
+    expected = _hmac.new(_pass_secret(), base.encode(), _hashlib.sha256).hexdigest()[:8]
+    if not _hmac.compare_digest(sig, expected):
+        return None
+    kind, rest = base[0], base[1:]
+    if kind not in ('v', 'm'):
+        return None
+    try:
+        return (kind, int(rest))
+    except ValueError:
+        return None
+
+def _build_pass_url(token):
+    # Use the request's host so QR works on any deployment domain (local /
+    # Render / a custom domain) without configuration.
+    return f"{request.host_url.rstrip('/')}/v/{token}"
 
 
 @app.route('/api/visitors/<int:vid>/qr')
@@ -3069,15 +3111,10 @@ def api_visitor_qr(vid):
     v = Visitor.query.get(vid)
     if not v:
         return jsonify({"status": "error", "message": "not found"}), 404
-    png = _make_qr_png({
-        "type":       "visitor",
-        "id":         v.id,
-        "name":       v.name,
-        "plate":      v.number_plate or "",
-        "host":       v.host_employee or "",
-        "valid_from": v.start_at.strftime("%Y-%m-%d %H:%M") if v.start_at else "",
-        "valid_to":   v.end_at.strftime("%Y-%m-%d %H:%M") if v.end_at else "",
-    })
+    # QR now encodes the verification URL — phone cameras open it directly
+    # and the operator sees a clean VALID/EXPIRED page.
+    url = _build_pass_url(_make_pass_token('v', v.id))
+    png = _make_qr_png(url)
     return Response(png, mimetype='image/png',
                     headers={'Cache-Control': 'no-store'})
 
@@ -3090,17 +3127,66 @@ def api_employee_qr(eid):
     w = Whitelist.query.get(eid)
     if not w:
         return jsonify({"status": "error", "message": "not found"}), 404
-    png = _make_qr_png({
-        "type":        "member",
-        "id":          w.id,
-        "name":        w.owner_name or "",
-        "plate":       w.number_plate or "",
-        "rfid_tag":    w.rfid_tag or "",
-        "department":  w.department or "",
-        "valid_until": w.valid_until.strftime("%Y-%m-%d") if w.valid_until else "",
-    })
+    url = _build_pass_url(_make_pass_token('m', w.id))
+    png = _make_qr_png(url)
     return Response(png, mimetype='image/png',
                     headers={'Cache-Control': 'no-store'})
+
+
+# ── Pass verification page (opens when QR is scanned) ────────────────────────
+@app.route('/v/<token>')
+def pass_verify(token):
+    parsed = _verify_pass_token(token)
+    now    = datetime.now()
+    ctx    = {"now": now.strftime("%Y-%m-%d %H:%M:%S"), "error": None, "pass_": None}
+
+    if not parsed:
+        ctx["error"] = "Invalid or tampered pass code. This QR did not originate from VayAccess."
+        return render_template('pass_verify.html', **ctx), 404
+
+    kind, row_id = parsed
+    if kind == 'v':
+        row = Visitor.query.get(row_id)
+        if not row:
+            ctx["error"] = "Visitor pass not found."
+            return render_template('pass_verify.html', **ctx), 404
+        is_valid = bool(row.start_at and row.end_at and row.start_at <= now <= row.end_at)
+        ctx["pass_"] = {
+            "type":       "Visitor",
+            "name":       row.name or "—",
+            "plate":      row.number_plate or "",
+            "subline":    f"Host: {row.host_employee or '—'} · Contact: {row.contact or '—'}",
+            "purpose":    row.purpose or "",
+            "valid_from": row.start_at.strftime("%Y-%m-%d %H:%M") if row.start_at else "—",
+            "valid_to":   row.end_at.strftime("%Y-%m-%d %H:%M")   if row.end_at   else "—",
+            "is_valid":   is_valid,
+            "status":     "VALID" if is_valid else "NOT VALID",
+            "sub":        ("Pass is currently active — admit entry"
+                           if is_valid else
+                           "Pass is outside its validity window — DO NOT ADMIT"),
+        }
+    else:   # 'm' = member
+        row = Whitelist.query.get(row_id)
+        if not row:
+            ctx["error"] = "Member pass not found."
+            return render_template('pass_verify.html', **ctx), 404
+        # Member is valid if valid_until is today or later.
+        is_valid = bool(row.valid_until and row.valid_until >= now)
+        ctx["pass_"] = {
+            "type":       "Member",
+            "name":       row.owner_name or "—",
+            "plate":      row.number_plate or "",
+            "subline":    f"Dept: {row.department or '—'} · Tag: {row.rfid_tag or '—'}",
+            "purpose":    "",
+            "valid_from": row.activated_at.strftime("%Y-%m-%d %H:%M") if row.activated_at else "—",
+            "valid_to":   row.valid_until.strftime("%Y-%m-%d")        if row.valid_until  else "—",
+            "is_valid":   is_valid,
+            "status":     "VALID" if is_valid else "EXPIRED",
+            "sub":        ("Active member — admit entry"
+                           if is_valid else
+                           "Membership has expired — DO NOT ADMIT"),
+        }
+    return render_template('pass_verify.html', **ctx)
 
 
 # ── Home Page summary (PDF page 5 layout) ────────────────────────────────────
