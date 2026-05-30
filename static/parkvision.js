@@ -3224,3 +3224,13 @@ $('rp-search')?.addEventListener('input', loadRolePerms);
 // Pick up the new tables in Refresh/Export/Batch button injections.
 _injectTableActions();
 _injectBatchButtons();
+
+// ── Phase 13: Monthly Report (server-rendered PDF download) ──────────────────
+$('rpt-monthly-pdf')?.addEventListener('click', () => {
+  const m = $('rpt-month')?.value || new Date().toISOString().slice(0, 7);
+  const a = document.createElement('a');
+  a.href = `/api/reports/monthly_pdf?month=${encodeURIComponent(m)}`;
+  a.download = `VayAccess-Report-${m}.pdf`;
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('📄 Generating monthly report…', 'ok');
+});

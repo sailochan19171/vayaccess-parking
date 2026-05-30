@@ -2949,6 +2949,109 @@ try:
 except ImportError:
     _QR_AVAILABLE = False
 
+# Monthly PDF report (reportlab). Same try-import pattern.
+try:
+    from io import BytesIO as _PdfBytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors as _rl_colors
+    from reportlab.lib.units import cm as _rl_cm
+    _PDF_AVAILABLE = True
+except ImportError:
+    _PDF_AVAILABLE = False
+
+
+@app.route('/api/reports/monthly_pdf')
+def api_monthly_pdf():
+    if not _PDF_AVAILABLE:
+        return jsonify({"status": "error",
+                        "message": "PDF support not installed (reportlab missing)"}), 503
+
+    # Parse ?month=YYYY-MM, default to current month.
+    month_q = (request.args.get('month') or '').strip()
+    try:
+        if month_q:
+            y, m = map(int, month_q.split('-'))
+        else:
+            now = datetime.now(); y, m = now.year, now.month
+    except Exception:
+        now = datetime.now(); y, m = now.year, now.month
+    start = datetime(y, m, 1)
+    end   = datetime(y + 1, 1, 1) if m == 12 else datetime(y, m + 1, 1)
+
+    parking_total = ParkingTransaction.query.filter(
+        ParkingTransaction.entry_at >= start, ParkingTransaction.entry_at < end).count()
+    exited = ParkingTransaction.query.filter(
+        ParkingTransaction.exit_at >= start, ParkingTransaction.exit_at < end).count()
+    revenue = db.session.query(
+        db.func.coalesce(db.func.sum(ParkingTransaction.total_amount), 0)
+    ).filter(ParkingTransaction.exit_at >= start,
+             ParkingTransaction.exit_at <  end).scalar() or 0
+    member_revenue = db.session.query(
+        db.func.coalesce(db.func.sum(Whitelist.payment_amount), 0)
+    ).filter(Whitelist.paid_at >= start, Whitelist.paid_at < end).scalar() or 0
+
+    # Daily entries/exits across the month.
+    daily = [['Date', 'Entries', 'Exits']]
+    cur = start
+    while cur < end:
+        nxt = cur + timedelta(days=1)
+        e = ParkingTransaction.query.filter(
+            ParkingTransaction.entry_at >= cur, ParkingTransaction.entry_at < nxt).count()
+        x = ParkingTransaction.query.filter(
+            ParkingTransaction.exit_at >= cur, ParkingTransaction.exit_at < nxt).count()
+        daily.append([cur.strftime('%Y-%m-%d'), str(e), str(x)])
+        cur = nxt
+
+    buf = _PdfBytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=2 * _rl_cm, rightMargin=2 * _rl_cm,
+                            topMargin=1.5 * _rl_cm, bottomMargin=1.5 * _rl_cm)
+    styles = getSampleStyleSheet()
+    elems = [
+        Paragraph('<b>VayAccess Systems · Monthly Report</b>', styles['Title']),
+        Paragraph(f'Period: {start.strftime("%B %Y")}', styles['Heading3']),
+        Spacer(1, 12),
+    ]
+    summary = [
+        ['Metric', 'Value'],
+        ['Total parking transactions', str(parking_total)],
+        ['Vehicles exited',            str(exited)],
+        ['Temporary parking revenue',  f'Rs {int(revenue):,}'],
+        ['Member purchase revenue',    f'Rs {int(member_revenue):,}'],
+        ['Total revenue',              f'Rs {int(revenue + member_revenue):,}'],
+    ]
+    t1 = Table(summary, colWidths=[8 * _rl_cm, 5 * _rl_cm])
+    t1.setStyle(TableStyle([
+        ('BACKGROUND',  (0, 0), (-1, 0),  _rl_colors.HexColor('#1f73d4')),
+        ('TEXTCOLOR',   (0, 0), (-1, 0),  _rl_colors.white),
+        ('FONTNAME',    (0, 0), (-1, 0),  'Helvetica-Bold'),
+        ('GRID',        (0, 0), (-1, -1), 0.5, _rl_colors.HexColor('#e5e9ef')),
+        ('FONTSIZE',    (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING',    (0, 0), (-1, -1), 6),
+    ]))
+    elems.append(t1)
+    elems.append(Spacer(1, 18))
+    elems.append(Paragraph('<b>Daily Entries / Exits</b>', styles['Heading3']))
+    t2 = Table(daily, colWidths=[5 * _rl_cm, 4 * _rl_cm, 4 * _rl_cm])
+    t2.setStyle(TableStyle([
+        ('BACKGROUND',     (0, 0), (-1, 0),  _rl_colors.HexColor('#1f73d4')),
+        ('TEXTCOLOR',      (0, 0), (-1, 0),  _rl_colors.white),
+        ('FONTNAME',       (0, 0), (-1, 0),  'Helvetica-Bold'),
+        ('GRID',           (0, 0), (-1, -1), 0.5, _rl_colors.HexColor('#e5e9ef')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [_rl_colors.white, _rl_colors.HexColor('#f4f7fa')]),
+        ('FONTSIZE',       (0, 0), (-1, -1), 9),
+    ]))
+    elems.append(t2)
+    doc.build(elems)
+
+    return Response(buf.getvalue(), mimetype='application/pdf', headers={
+        'Content-Disposition': f'attachment; filename="VayAccess-Report-{start.strftime("%Y-%m")}.pdf"',
+        'Cache-Control': 'no-store',
+    })
+
 
 def _make_qr_png(payload_dict):
     img = _qrcode.make(json.dumps(payload_dict, separators=(',', ':')),
