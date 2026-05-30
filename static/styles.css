@@ -1188,6 +1188,30 @@ td, th, .epc, code, .scan-row dd,
   font-size: 0.92rem;
 }
 
+/* Per-table action group (Refresh + 📥 CSV), injected into each panel-head. */
+.table-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.table-actions button {
+  padding: 4px 12px;
+  min-height: 32px;
+  font-size: 0.85rem;
+}
+
+/* Dashboard expiry-alerts list rows. */
+.hs-expiry-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(168, 114, 23, 0.06);
+  border: 1px solid rgba(168, 114, 23, 0.15);
+  border-radius: 8px;
+  font-size: 0.92rem;
+}
+
 /* ──────────────────────────────────────────────────────────────────────
    Monitoring Center (PDF page 4). Dark dual-camera layout — kept self-
    contained so the SaaS-light theme on every other page is unaffected.

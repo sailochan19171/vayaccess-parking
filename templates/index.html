@@ -385,6 +385,15 @@
             </div>
           </div>
 
+          <!-- Member-expiry alerts. Hidden when no rows match. -->
+          <div id="hs-expiry-host" class="panel" style="display:none; margin-bottom:14px; border-left:4px solid #a87217;">
+            <div class="panel-head">
+              <h2>⚠ Member Expiry Alerts</h2>
+              <span class="hint"><b id="hs-expiry-count">0</b> member(s) expiring soon or expired</span>
+            </div>
+            <div id="hs-expiry-list" style="display:grid; gap:8px;"></div>
+          </div>
+
           <div class="metric-grid">
             <article class="metric">
               <span>Occupancy</span>

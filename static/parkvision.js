@@ -2332,6 +2332,131 @@ $('pr-reset') ?.addEventListener('click', () => {
   loadParkingRecords();
 });
 
+// ── Phase 10: per-table Refresh + CSV Export + Member-expiry alerts ──────────
+// Each data table's panel-head gets a small action group (Refresh + 📥 CSV)
+// injected once at load. Avoids editing every section's HTML by hand.
+const _exportCfg = {
+  pr:     { loader: 'parking-records', name: 'parking-records',
+            cols: [['vehicle','License Plate'],['type','Vehicle Type'],['entryAt','Entry Time'],['exitAt','Exit Time'],['total','Amount'],['payment','Payment'],['isActive','Active']] },
+  sr:     { loader: 'scanning-record', name: 'scanning-record',
+            cols: [['timestamp','Scan Time'],['number_plate','License Plate'],['rfid_tag','Tag (EPC)'],['owner_name','Owner'],['department','Department'],['vehicle_type','Type'],['status','Status']] },
+  rv:     { loader: 'registered', name: 'registered-vehicles',
+            cols: [['owner_name','Owner'],['number_plate','License Plate'],['rfid_tag','Tag (EPC)'],['vehicle_type','Type'],['department','Department'],['payment_method','Payment'],['payment_amount','Amount'],['valid_until','Valid Until'],['status','Status']] },
+  bl:     { loader: 'blacklist', name: 'blacklist',
+            cols: [['number_plate','License Plate'],['rfid_tag','Tag (EPC)'],['reason','Reason'],['added_by','Added By'],['created_at','Added On']] },
+  od:     { loader: 'orders', name: 'orders',
+            cols: [['order_no','Order Number'],['type','Order Type'],['plate','License Plate'],['amount','Amount'],['payment','Payment'],['created_at','Created'],['admission','Admission'],['status','Status']] },
+  mm:     { loader: 'membership', name: 'monthly-membership',
+            cols: [['owner_name','Member'],['number_plate','License Plate'],['rfid_tag','Tag (EPC)'],['department','Department'],['activation_months','Plan (months)'],['payment_amount','Amount'],['valid_until','Valid Until'],['status','Status']] },
+  tm:     { loader: 'type-mgmt', name: 'vehicle-types',
+            cols: [['type','Vehicle Type'],['model','Tariff Model'],['rate','Hourly Rate'],['dailyCap','Daily Cap'],['lost','Lost Ticket']] },
+  vis:    { loader: 'visitors', name: 'visitors',
+            cols: [['name','Visitor'],['number_plate','License Plate'],['contact','Contact'],['purpose','Purpose'],['host_employee','Host'],['start_at','Valid From'],['end_at','Valid To'],['status','Status']] },
+  eq:     { loader: 'equipment', name: 'equipment',
+            cols: [['name','Device'],['type','Type'],['status','Status'],['lastSeen','Last Seen']] },
+  yard:   { loader: 'yard', name: 'yards',
+            cols: [['name','Yard'],['capacity','Capacity'],['occupied','Occupied'],['available','Available'],['location','Location'],['region','Region']] },
+  region: { loader: 'region', name: 'regions',
+            cols: [['name','Region'],['yard_count','Yards'],['description','Description'],['created_at','Created']] },
+  acc:    { loader: 'account', name: 'accounts',
+            cols: [['name','Account'],['nickname','Nickname'],['contact','Contact'],['role','Role'],['created_at','Created']] },
+  rl:     { loader: 'role', name: 'roles',
+            cols: [['name','Role'],['account_count','Accounts'],['description','Description'],['created_at','Created']] },
+  dc:     { loader: 'dictionary', name: 'dictionary',
+            cols: [['category','Category'],['key','Key'],['value','Value'],['created_at','Created']] },
+};
+
+function _csvEscape(v) {
+  if (v == null) return '';
+  let s = String(v);
+  // Convert millisecond timestamps to ISO date for time fields.
+  if (typeof v === 'number' && v > 1_000_000_000_000) {
+    try { s = new Date(v).toISOString().replace('T', ' ').slice(0, 19); } catch (e) {}
+  }
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function exportTableCSV(key) {
+  const cfg = _exportCfg[key]; if (!cfg) return;
+  const rows = _pager[key]?.rows || [];
+  if (!rows.length) { toast('Nothing to export', 'err'); return; }
+  const header = cfg.cols.map(c => c[1]).join(',');
+  const body = rows.map(r => cfg.cols.map(([k]) => _csvEscape(r[k])).join(',')).join('\n');
+  const blob = new Blob([header + '\n' + body], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${cfg.name}-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 0);
+}
+
+// Inject Refresh + 📥 CSV buttons into every data table's panel-head once.
+function _injectTableActions() {
+  Object.keys(_exportCfg).forEach(key => {
+    const cfg = _exportCfg[key];
+    const tbl = document.getElementById(`${key}-table`); if (!tbl) return;
+    const panel = tbl.closest('.panel');
+    const head  = panel && panel.querySelector('.panel-head');
+    if (!head || head.querySelector('.table-actions')) return;  // already done
+    const actions = document.createElement('div');
+    actions.className = 'table-actions';
+    actions.innerHTML = `
+      <button class="ghost-button" data-refresh="${cfg.loader}" title="Refresh">↻</button>
+      <button class="ghost-button" data-export-key="${key}" title="Export CSV">📥 CSV</button>`;
+    head.appendChild(actions);
+  });
+}
+_injectTableActions();
+
+// Delegated: refresh + export.
+document.addEventListener('click', (e) => {
+  const ref = e.target.closest && e.target.closest('[data-refresh]');
+  if (ref) {
+    const fn = _liveLoaders[ref.dataset.refresh];
+    if (fn) { fn(); toast('↻ Refreshed', 'ok'); }
+    return;
+  }
+  const exp = e.target.closest && e.target.closest('[data-export-key]');
+  if (exp) { exportTableCSV(exp.dataset.exportKey); return; }
+});
+
+// Member-expiry alerts on the dashboard. Renders a banner+list of members
+// whose validity ends in the next 14 days OR has already passed (Expired).
+async function loadExpiryAlerts() {
+  const host = $('hs-expiry-host'); if (!host) return;
+  try {
+    const all = await (await fetch('/api/employees', { cache: 'no-store' })).json();
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const horizon = new Date(today.getTime() + 14 * 86_400_000);
+    const items = (Array.isArray(all) ? all : [])
+      .filter(e => e.valid_until)
+      .map(e => ({ ...e, _vd: new Date(e.valid_until + 'T00:00:00') }))
+      .filter(e => e._vd <= horizon)
+      .sort((a, b) => a._vd - b._vd);
+    if (!items.length) { host.style.display = 'none'; return; }
+    host.style.display = '';
+    $('hs-expiry-count').textContent = items.length;
+    $('hs-expiry-list').innerHTML = items.slice(0, 12).map(e => {
+      const days = Math.ceil((e._vd - today) / 86_400_000);
+      const tag = days < 0 ? `<span style="color:#b74a42; font-weight:700;">Expired ${Math.abs(days)}d ago</span>`
+        : days === 0 ? `<span style="color:#b74a42; font-weight:700;">Expires today</span>`
+        : `<span style="color:#a87217; font-weight:700;">${days}d left</span>`;
+      return `<div class="hs-expiry-item">
+        <span><b>${_esc(e.owner_name) || '—'}</b> <span style="opacity:0.6;">${_esc(e.number_plate) || '—'}</span></span>
+        <span style="font-size:0.85em;">${_esc(e.valid_until)} · ${tag}</span>
+      </div>`;
+    }).join('') + (items.length > 12 ? `<div style="opacity:0.7; font-size:0.85em; margin-top:6px;">+${items.length - 12} more</div>` : '');
+  } catch (e) { /* ignore */ }
+}
+// Update the dashboard's live-refresh hook so the 5s tick AND nav-click
+// refresh the expiry alerts alongside the home summary. (Just replacing the
+// _liveLoaders.dashboard reference — no need to mutate loadHomeSummary itself.)
+_liveLoaders.dashboard = async function () {
+  await loadHomeSummary();
+  await loadExpiryAlerts();
+};
+// Initial load of expiry alerts (home summary was already loaded above).
+loadExpiryAlerts();
+
 // ── Phase 4: Member sub-menu / Type / Visitors / Equipment / Settings ────────
 async function loadMembership() {
   const tb = $('mm-body'); if (!tb) return;
