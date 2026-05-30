@@ -1547,9 +1547,62 @@
             </div>
           </section>
         </section>
-        <section id="menu-mgmt" class="view"><div class="stub-panel panel"><div class="stub-ico">📋</div>
-          <h2>Menu Management</h2><p>Configure which sidebar menus each role can see.</p>
-          <p class="stub-note">Menu visibility ties into Role Permission (below) — built together in the RBAC chunk.</p></div></section>
+        <!-- Menu Management — live CRUD from /api/menu_permissions -->
+        <section id="menu-mgmt" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Menu Permission</h2></div>
+            <form id="mn-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(3,1fr); gap:12px; align-items:end;">
+              <label>Role *<select id="mn-role"><option value="">— Select role —</option></select></label>
+              <label>Menu Item *
+                <select id="mn-menu" data-menu-options>
+                  <option value="">— Select menu —</option>
+                  <option value="dashboard">Home Page</option>
+                  <option value="reports">Statistical Management</option>
+                  <option value="video">Video Monitoring</option>
+                  <option value="parking-records">Parking Records</option>
+                  <option value="scanning-record">Scanning Record</option>
+                  <option value="devices">Lane Monitoring</option>
+                  <option value="exit">Manual Exit Record</option>
+                  <option value="orders">Order Management</option>
+                  <option value="admin">Member Management · Whitelist</option>
+                  <option value="membership">Member Management · Monthly</option>
+                  <option value="registered">Registered Vehicle</option>
+                  <option value="blacklist">Black List</option>
+                  <option value="yard">Yard Management</option>
+                  <option value="region">Region Management</option>
+                  <option value="type-mgmt">Type Management</option>
+                  <option value="visitors">Visitor Management</option>
+                  <option value="account">Account Management</option>
+                  <option value="lcd">LCD Display</option>
+                  <option value="equipment">Equipment Management</option>
+                  <option value="menu-mgmt">Menu Management</option>
+                  <option value="role">Role Management</option>
+                  <option value="role-perm">Role Permission</option>
+                  <option value="dictionary">Dictionary Managed</option>
+                  <option value="settings-basic">Basic Settings</option>
+                  <option value="settings-entry-exit">Entry/Exit Settings</option>
+                </select>
+              </label>
+              <label>Visibility
+                <select id="mn-allowed"><option value="1">Allowed (visible)</option><option value="0">Blocked (hidden)</option></select>
+              </label>
+              <div style="grid-column:1/-1;"><button type="submit" id="mn-submit">+ Save Permission</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Menu Visibility</h2><span class="hint" id="mn-meta">Loading…</span></div>
+              <input type="text" id="mn-search" placeholder="Search role / menu…" style="margin:0; min-width:220px;">
+            </div>
+            <p class="hint" style="margin:0 0 10px;">Configuration is persisted in Neon. Runtime sidebar enforcement is a later hook.</p>
+            <div class="table-wrap">
+              <table id="mn-table">
+                <thead><tr><th>Role</th><th>Menu Item</th><th>Status</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="mn-body"><tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
         <!-- Role Management — live CRUD from /api/roles -->
         <section id="role" class="view">
           <section class="panel" style="margin-bottom:16px;">
@@ -1573,9 +1626,40 @@
             </div>
           </section>
         </section>
-        <section id="role-perm" class="view"><div class="stub-panel panel"><div class="stub-ico">🔑</div>
-          <h2>Role Permission</h2><p>Grant per-role access to each section/action.</p>
-          <p class="stub-note">The permission matrix depends on Role + Menu Management — built together in the RBAC chunk.</p></div></section>
+        <!-- Role Permission — live CRUD from /api/role_permissions -->
+        <section id="role-perm" class="view">
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Role Permission</h2></div>
+            <form id="rp-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(4,1fr); gap:12px; align-items:end;">
+              <label>Role *<select id="rp-role"><option value="">— Select role —</option></select></label>
+              <label>Section *<select id="rp-section" data-menu-options><option value="">— Select section —</option></select></label>
+              <label>Action *
+                <select id="rp-action">
+                  <option value="read">Read (view)</option>
+                  <option value="write">Write (create / edit)</option>
+                  <option value="delete">Delete</option>
+                </select>
+              </label>
+              <label>Allowed
+                <select id="rp-allowed"><option value="1">Yes</option><option value="0">No</option></select>
+              </label>
+              <div style="grid-column:1/-1;"><button type="submit" id="rp-submit">+ Save Permission</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div><h2>Role Permissions</h2><span class="hint" id="rp-meta">Loading…</span></div>
+              <input type="text" id="rp-search" placeholder="Search role / section / action…" style="margin:0; min-width:220px;">
+            </div>
+            <p class="hint" style="margin:0 0 10px;">Configuration is persisted in Neon. Runtime enforcement is a later hook.</p>
+            <div class="table-wrap">
+              <table id="rp-table">
+                <thead><tr><th>Role</th><th>Section</th><th>Action</th><th>Status</th><th>Created</th><th>Action</th></tr></thead>
+                <tbody id="rp-body"><tr><td colspan="6" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
         <!-- Dictionary Managed — live CRUD from /api/dictionary -->
         <section id="dictionary" class="view">
           <section class="panel" style="margin-bottom:16px;">

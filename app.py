@@ -16,7 +16,8 @@ if not CLOUD_MODE:
 from flask import Flask, render_template, request, jsonify, Response
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
-                      Account, Role, DictionaryEntry, LCDScreen, migrate_schema)
+                      Account, Role, DictionaryEntry, LCDScreen,
+                      MenuPermission, RolePermission, migrate_schema)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -2762,6 +2763,78 @@ def api_lcd_delete(sid):
         return jsonify({"status": "error", "message": "not found"}), 404
     db.session.delete(row); db.session.commit()
     AuditEvent.log(f"LCD removed: {row.name}", area='System')
+    return jsonify({"status": "ok"})
+
+
+# ── System Management: Menu visibility per role ──────────────────────────────
+@app.route('/api/menu_permissions', methods=['GET', 'POST'])
+def api_menu_perms():
+    if request.method == 'POST':
+        d = request.json or {}
+        role = (d.get('role_name') or '').strip()
+        menu = (d.get('menu_key') or '').strip()
+        if not role or not menu:
+            return jsonify({"status": "error", "message": "Role and menu are required"}), 400
+        existing = MenuPermission.query.filter(
+            MenuPermission.role_name == role,
+            MenuPermission.menu_key  == menu).first()
+        if existing:
+            existing.allowed = bool(d.get('allowed', True))
+        else:
+            db.session.add(MenuPermission(role_name=role, menu_key=menu,
+                                          allowed=bool(d.get('allowed', True))))
+        db.session.commit()
+        AuditEvent.log(f"Menu perm set: {role}/{menu}", area='System')
+        return jsonify({"status": "ok"})
+    return jsonify([m.to_dict() for m in MenuPermission.query
+                    .order_by(MenuPermission.role_name, MenuPermission.menu_key).all()])
+
+
+@app.route('/api/menu_permissions/<int:mid>', methods=['DELETE'])
+def api_menu_perms_delete(mid):
+    row = MenuPermission.query.get(mid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    db.session.delete(row); db.session.commit()
+    AuditEvent.log(f"Menu perm removed: {row.role_name}/{row.menu_key}", area='System')
+    return jsonify({"status": "ok"})
+
+
+# ── System Management: Role × Section permission grants ─────────────────────
+@app.route('/api/role_permissions', methods=['GET', 'POST'])
+def api_role_perms():
+    if request.method == 'POST':
+        d = request.json or {}
+        role = (d.get('role_name') or '').strip()
+        sec  = (d.get('section_key') or '').strip()
+        act  = (d.get('action') or 'read').strip().lower()
+        if not role or not sec:
+            return jsonify({"status": "error", "message": "Role and section are required"}), 400
+        if act not in ('read', 'write', 'delete'):
+            return jsonify({"status": "error", "message": "Action must be read/write/delete"}), 400
+        existing = RolePermission.query.filter(
+            RolePermission.role_name   == role,
+            RolePermission.section_key == sec,
+            RolePermission.action      == act).first()
+        if existing:
+            existing.allowed = bool(d.get('allowed', True))
+        else:
+            db.session.add(RolePermission(role_name=role, section_key=sec, action=act,
+                                          allowed=bool(d.get('allowed', True))))
+        db.session.commit()
+        AuditEvent.log(f"Role perm set: {role}/{sec}/{act}", area='System')
+        return jsonify({"status": "ok"})
+    return jsonify([r.to_dict() for r in RolePermission.query
+                    .order_by(RolePermission.role_name, RolePermission.section_key, RolePermission.action).all()])
+
+
+@app.route('/api/role_permissions/<int:rid>', methods=['DELETE'])
+def api_role_perms_delete(rid):
+    row = RolePermission.query.get(rid)
+    if not row:
+        return jsonify({"status": "error", "message": "not found"}), 404
+    db.session.delete(row); db.session.commit()
+    AuditEvent.log(f"Role perm removed: {row.role_name}/{row.section_key}/{row.action}", area='System')
     return jsonify({"status": "ok"})
 
 

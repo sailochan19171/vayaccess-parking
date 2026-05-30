@@ -3125,3 +3125,102 @@ document.addEventListener('click', (e) => {
   const bd = e.target.closest && e.target.closest('[data-batch-key]');
   if (bd) batchDelete(bd.dataset.batchKey);
 });
+
+// ── Phase 12: Menu Management + Role Permission (real CRUD) ──────────────────
+// Copy the Menu Management option list into the Role-Permission Section dropdown
+// (avoids duplicating 25 options in the HTML).
+(function _shareMenuOptions() {
+  const src = document.querySelector('#mn-menu[data-menu-options]');
+  const dst = document.querySelector('#rp-section[data-menu-options]');
+  if (src && dst) dst.innerHTML = src.innerHTML.replace('— Select menu —', '— Select section —');
+})();
+
+// Populate Role dropdowns from /api/roles. Refresh whenever Menu/RolePerm loads.
+async function _populateRoleDropdowns() {
+  try {
+    const roles = await (await fetch('/api/roles', { cache: 'no-store' })).json();
+    const opts  = '<option value="">— Select role —</option>' +
+      (Array.isArray(roles) ? roles : []).map(r => `<option value="${_esc(r.name)}">${_esc(r.name)}</option>`).join('');
+    ['mn-role', 'rp-role'].forEach(id => {
+      const el = $(id); if (!el) return;
+      const cur = el.value;
+      el.innerHTML = opts;
+      el.value = cur;
+    });
+  } catch (e) { /* ignore */ }
+}
+
+async function loadMenuPerms() {
+  const tb = $('mn-body'); if (!tb) return;
+  _populateRoleDropdowns();
+  try {
+    const raw = await (await fetch('/api/menu_permissions', { cache: 'no-store' })).json();
+    const rows = _filterRows(Array.isArray(raw) ? raw : [], $('mn-search')?.value, ['role_name', 'menu_key']);
+    if ($('mn-meta')) $('mn-meta').textContent = `${rows.length} rule(s)`;
+    paginate('mn', rows, 'mn-body', m => `<tr>
+      <td><b>${_esc(m.role_name)}</b></td>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(m.menu_key)}</td>
+      <td><span class="scan-status-badge ${m.allowed ? 'granted' : 'denied'}">${_esc(m.status)}</span></td>
+      <td>${_esc(m.created_at)}</td>
+      <td><button class="ghost-button mn-del" data-id="${m.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`, 5, (tb) => {
+      tb.querySelectorAll('.mn-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this menu permission?')) return;
+        await fetch(`/api/menu_permissions/${b.dataset.id}`, { method: 'DELETE' });
+        loadMenuPerms();
+      }));
+    });
+  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+}
+
+async function loadRolePerms() {
+  const tb = $('rp-body'); if (!tb) return;
+  _populateRoleDropdowns();
+  try {
+    const raw = await (await fetch('/api/role_permissions', { cache: 'no-store' })).json();
+    const rows = _filterRows(Array.isArray(raw) ? raw : [], $('rp-search')?.value, ['role_name', 'section_key', 'action']);
+    if ($('rp-meta')) $('rp-meta').textContent = `${rows.length} grant(s)`;
+    paginate('rp', rows, 'rp-body', r => `<tr>
+      <td><b>${_esc(r.role_name)}</b></td>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(r.section_key)}</td>
+      <td><span class="scan-status-badge scanning">${_esc(r.action)}</span></td>
+      <td><span class="scan-status-badge ${r.allowed ? 'granted' : 'denied'}">${_esc(r.status)}</span></td>
+      <td>${_esc(r.created_at)}</td>
+      <td><button class="ghost-button rp-del" data-id="${r.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+    </tr>`, 6, (tb) => {
+      tb.querySelectorAll('.rp-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this role permission?')) return;
+        await fetch(`/api/role_permissions/${b.dataset.id}`, { method: 'DELETE' });
+        loadRolePerms();
+      }));
+    });
+  } catch (e) { tb.innerHTML = _emptyRow(6, 'Failed to load.'); }
+}
+
+_wireAddForm('mn-form', 'mn-submit', () => ({
+  role_name: $('mn-role').value, menu_key: $('mn-menu').value,
+  allowed: $('mn-allowed').value === '1',
+}), '/api/menu_permissions', '✓ Menu permission saved', loadMenuPerms);
+
+_wireAddForm('rp-form', 'rp-submit', () => ({
+  role_name: $('rp-role').value, section_key: $('rp-section').value,
+  action: $('rp-action').value, allowed: $('rp-allowed').value === '1',
+}), '/api/role_permissions', '✓ Role permission saved', loadRolePerms);
+
+_exportCfg.mn = { loader: 'menu-mgmt', name: 'menu-permissions',
+  cols: [['role_name', 'Role'], ['menu_key', 'Menu'], ['status', 'Status'], ['created_at', 'Created']] };
+_exportCfg.rp = { loader: 'role-perm', name: 'role-permissions',
+  cols: [['role_name', 'Role'], ['section_key', 'Section'], ['action', 'Action'], ['status', 'Status'], ['created_at', 'Created']] };
+Object.assign(_liveLoaders, { 'menu-mgmt': loadMenuPerms, 'role-perm': loadRolePerms });
+_batchable.mn = '/api/menu_permissions';
+_batchable.rp = '/api/role_permissions';
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  const v = btn.dataset.view || btn.dataset.jump;
+  if (v === 'menu-mgmt') btn.addEventListener('click', () => setTimeout(loadMenuPerms, 30));
+  if (v === 'role-perm') btn.addEventListener('click', () => setTimeout(loadRolePerms, 30));
+});
+$('mn-search')?.addEventListener('input', loadMenuPerms);
+$('rp-search')?.addEventListener('input', loadRolePerms);
+// Pick up the new tables in Refresh/Export/Batch button injections.
+_injectTableActions();
+_injectBatchButtons();

@@ -417,6 +417,46 @@ class DictionaryEntry(db.Model):
         }
 
 
+class MenuPermission(db.Model):
+    __tablename__ = 'menu_permissions'
+    id         = db.Column(db.Integer, primary_key=True)
+    role_name  = db.Column(db.String(80),  nullable=False)
+    menu_key   = db.Column(db.String(80),  nullable=False)   # matches sidebar data-view
+    allowed    = db.Column(db.Boolean,     default=True)
+    created_at = db.Column(db.DateTime,    default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":         self.id,
+            "role_name":  self.role_name,
+            "menu_key":   self.menu_key,
+            "allowed":    bool(self.allowed),
+            "status":     "Allowed" if self.allowed else "Blocked",
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
+
+class RolePermission(db.Model):
+    __tablename__ = 'role_permissions'
+    id          = db.Column(db.Integer, primary_key=True)
+    role_name   = db.Column(db.String(80), nullable=False)
+    section_key = db.Column(db.String(80), nullable=False)
+    action      = db.Column(db.String(20), nullable=False)   # read / write / delete
+    allowed     = db.Column(db.Boolean,    default=True)
+    created_at  = db.Column(db.DateTime,   default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id":          self.id,
+            "role_name":   self.role_name,
+            "section_key": self.section_key,
+            "action":      self.action,
+            "allowed":     bool(self.allowed),
+            "status":      "Allowed" if self.allowed else "Blocked",
+            "created_at":  self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
+        }
+
+
 class LCDScreen(db.Model):
     __tablename__ = 'lcd_screens'
     id          = db.Column(db.Integer, primary_key=True)
