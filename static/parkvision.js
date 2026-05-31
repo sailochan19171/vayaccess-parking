@@ -53,6 +53,11 @@ function _hydrateTopbarUser() {
   if (infoName) infoName.textContent = u.name || '—';
   const infoRole = document.getElementById('topbar-user-info-role');
   if (infoRole) infoRole.textContent = u.role || 'No role assigned';
+  // Welcome line in the topbar header. Replaces the hardcoded "Hello root".
+  const greeting = document.getElementById('welcome-greeting');
+  if (greeting && u.name) {
+    greeting.textContent = `Hello ${u.name}, Welcome to VayAccess Management System`;
+  }
 }
 
 // Topbar user dropdown — click to toggle, click-outside or Escape to close,
