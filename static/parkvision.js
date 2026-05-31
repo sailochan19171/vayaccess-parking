@@ -3661,8 +3661,20 @@ function bulkImport(key) {
       });
       const js = await r.json();
       if (r.ok && js.status === 'ok') {
-        const skippedNote = js.skipped ? ` (server rejected ${js.skipped})` : '';
-        toast(`✓ Imported ${js.imported}${skippedNote}`, 'ok');
+        if (js.skipped && Array.isArray(js.rejections) && js.rejections.length) {
+          // Show the operator EXACTLY which rows were rejected and why
+          // (duplicate plate, duplicate phone, etc.).
+          const lines = js.rejections.slice(0, 30)
+            .map(rej => `• Row ${rej.row}: ${rej.reason}`);
+          if (js.rejections.length > 30) lines.push(`…and ${js.rejections.length - 30} more`);
+          alert(`Imported ${js.imported} row(s) successfully.\n\n` +
+                `${js.skipped} row(s) were REJECTED by the server:\n\n` +
+                lines.join('\n') + '\n\n' +
+                `Common reasons: duplicate plate, duplicate phone number, ` +
+                `or a value already in use by another visitor / member.`);
+        } else {
+          toast(`✓ Imported ${js.imported}`, 'ok');
+        }
         _liveLoaders[cfg.loader]?.();
       } else if (r.status === 401) {
         alert('Login required — your session has expired. Sign in again to bulk import.');

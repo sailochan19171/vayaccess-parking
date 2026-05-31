@@ -1999,12 +1999,22 @@ def api_employees():
             row = existing
             action = "renewed"
         else:
-            # If the plate is in use by a different row, reject — uniqueness needed.
-            plate_clash = Whitelist.query.filter(
-                db.func.upper(Whitelist.number_plate) == plate_c.upper()).first()
-            if plate_clash:
+            # Plate uniqueness across BOTH whitelist (members) AND visitors —
+            # a single plate identifies one vehicle, and that vehicle has one
+            # owner of record.
+            clash = _find_plate_conflict(plate_c)
+            if clash:
                 return jsonify({"status": "error",
-                                "message": f"Plate {plate_c} is already enrolled"}), 400
+                                "message": f"Plate {plate_c} is already registered to "
+                                           f"{clash[1]} ({clash[0]}). Edit that record "
+                                           f"instead of creating a new one."}), 400
+            # Phone uniqueness too — a contact number identifies one person.
+            if contact:
+                pclash = _find_phone_conflict(contact)
+                if pclash:
+                    return jsonify({"status": "error",
+                                    "message": f"Phone {contact} is already registered to "
+                                               f"{pclash[1]} ({pclash[0]})."}), 400
             # Block duplicate UPI transaction IDs: a single provider txn
             # reference can only enroll one employee. Catches accidental
             # re-use and basic fraud. Cash payments have transaction_id=NULL
@@ -3343,12 +3353,33 @@ def api_employee_pass_url(eid):
 @admin_required
 def api_bulk_import_visitors():
     rows = (request.json or {}).get('rows') or []
-    ok = err = 0
+    ok = 0
+    rejections = []   # list of {row, reason} for the response
     now = datetime.now()
-    for r in rows:
-        name = (r.get('name') or r.get('Name') or '').strip()
+    # Track plates / phones seen inside THIS upload so duplicates within the
+    # same file are also rejected (not just duplicates against the DB).
+    seen_plates, seen_phones = set(), set()
+    for idx, r in enumerate(rows):
+        rownum = idx + 2   # +1 for 0-index, +1 for header row
+        name  = (r.get('name') or r.get('Name') or '').strip()
         if not name:
-            err += 1; continue
+            rejections.append({"row": rownum, "reason": "missing name"}); continue
+        plate = (r.get('number_plate') or r.get('plate') or r.get('Plate') or '').strip().upper() or None
+        contact = (r.get('contact') or r.get('Contact') or '').strip() or None
+        # Within-file duplicate check.
+        if plate and plate in seen_plates:
+            rejections.append({"row": rownum, "reason": f"plate {plate} appears earlier in this file"}); continue
+        if contact and _digits_only(contact) in seen_phones:
+            rejections.append({"row": rownum, "reason": f"phone {contact} appears earlier in this file"}); continue
+        # Cross-table (DB) duplicate check.
+        if plate:
+            clash = _find_plate_conflict(plate)
+            if clash:
+                rejections.append({"row": rownum, "reason": f"plate {plate} already registered to {clash[1]} ({clash[0]})"}); continue
+        if contact:
+            clash = _find_phone_conflict(contact)
+            if clash:
+                rejections.append({"row": rownum, "reason": f"phone {contact} already registered to {clash[1]} ({clash[0]})"}); continue
         # Optional valid_from/valid_to from CSV; otherwise default to now + 8h.
         try:
             start_at = datetime.strptime(r['valid_from'], '%Y-%m-%d %H:%M') if r.get('valid_from') else now
@@ -3360,20 +3391,20 @@ def api_bulk_import_visitors():
             end_at = now + timedelta(hours=8)
         try:
             db.session.add(Visitor(
-                name=name,
-                number_plate=(r.get('number_plate') or r.get('plate') or r.get('Plate') or '').strip().upper() or None,
-                contact=(r.get('contact') or r.get('Contact') or '').strip() or None,
+                name=name, number_plate=plate, contact=contact,
                 purpose=(r.get('purpose') or r.get('Purpose') or '').strip() or None,
                 host_employee=(r.get('host_employee') or r.get('host') or r.get('Host') or '').strip() or None,
-                start_at=start_at,
-                end_at=end_at,
+                start_at=start_at, end_at=end_at,
             ))
             ok += 1
-        except Exception:
-            err += 1
+            if plate:   seen_plates.add(plate)
+            if contact: seen_phones.add(_digits_only(contact))
+        except Exception as e:
+            rejections.append({"row": rownum, "reason": f"insert failed ({type(e).__name__})"})
     db.session.commit()
-    AuditEvent.log(f"Bulk imported {ok} visitor(s) ({err} skipped)", area='Admin')
-    return jsonify({"status": "ok", "imported": ok, "skipped": err})
+    AuditEvent.log(f"Bulk imported {ok} visitor(s) ({len(rejections)} skipped)", area='Admin')
+    return jsonify({"status": "ok", "imported": ok, "skipped": len(rejections),
+                    "rejections": rejections})
 
 
 @app.route('/api/bulk_import/members', methods=['POST'])
@@ -3383,14 +3414,31 @@ def api_bulk_import_members():
     Payment / activation defaults are set so the rows pass the existing
     not-null constraints; operator can edit specifics after import."""
     rows = (request.json or {}).get('rows') or []
-    ok = err = 0
+    ok = 0
+    rejections = []
     from dateutil.relativedelta import relativedelta
     now = datetime.now()
-    for r in rows:
+    seen_plates, seen_phones = set(), set()
+    for idx, r in enumerate(rows):
+        rownum = idx + 2
         name  = (r.get('owner_name') or r.get('name') or r.get('Name') or '').strip()
         plate = (r.get('number_plate') or r.get('plate') or r.get('Plate') or '').strip().upper()
+        contact = (r.get('contact_number') or r.get('contact') or '').strip() or None
         if not name or not plate:
-            err += 1; continue
+            rejections.append({"row": rownum, "reason": "missing owner_name or plate"}); continue
+        # Within-file duplicates
+        if plate in seen_plates:
+            rejections.append({"row": rownum, "reason": f"plate {plate} appears earlier in this file"}); continue
+        if contact and _digits_only(contact) in seen_phones:
+            rejections.append({"row": rownum, "reason": f"phone {contact} appears earlier in this file"}); continue
+        # Cross-table DB duplicates
+        clash = _find_plate_conflict(plate)
+        if clash:
+            rejections.append({"row": rownum, "reason": f"plate {plate} already registered to {clash[1]} ({clash[0]})"}); continue
+        if contact:
+            pclash = _find_phone_conflict(contact)
+            if pclash:
+                rejections.append({"row": rownum, "reason": f"phone {contact} already registered to {pclash[1]} ({pclash[0]})"}); continue
         try:
             months = int(r.get('activation_months') or r.get('months') or 12)
         except Exception:
@@ -3401,7 +3449,7 @@ def api_bulk_import_members():
                 number_plate=plate,
                 rfid_tag=(r.get('rfid_tag') or r.get('tag') or '').strip().upper() or None,
                 department=(r.get('department') or r.get('Department') or '').strip() or None,
-                contact_number=(r.get('contact_number') or r.get('contact') or '').strip() or None,
+                contact_number=contact,
                 vehicle_type=(r.get('vehicle_type') or r.get('type') or 'Car').strip() or 'Car',
                 activated_at=now,
                 activation_months=months,
@@ -3410,11 +3458,14 @@ def api_bulk_import_members():
                 payment_amount=int(r.get('payment_amount') or r.get('amount') or 0),
             ))
             ok += 1
-        except Exception:
-            err += 1
+            seen_plates.add(plate)
+            if contact: seen_phones.add(_digits_only(contact))
+        except Exception as e:
+            rejections.append({"row": rownum, "reason": f"insert failed ({type(e).__name__})"})
     db.session.commit()
-    AuditEvent.log(f"Bulk imported {ok} member(s) ({err} skipped)", area='Admin')
-    return jsonify({"status": "ok", "imported": ok, "skipped": err})
+    AuditEvent.log(f"Bulk imported {ok} member(s) ({len(rejections)} skipped)", area='Admin')
+    return jsonify({"status": "ok", "imported": ok, "skipped": len(rejections),
+                    "rejections": rejections})
 
 
 @app.route('/api/employees/<int:eid>/qr')
@@ -3569,8 +3620,22 @@ def api_visitors_update(vid):
         if not nm:
             return jsonify({"status": "error", "message": "Visitor name is required"}), 400
         row.name = nm
-    if 'number_plate'  in d: row.number_plate  = (d.get('number_plate') or '').strip().upper() or None
-    if 'contact'       in d: row.contact       = (d.get('contact') or '').strip() or None
+    if 'number_plate' in d:
+        new_plate = (d.get('number_plate') or '').strip().upper() or None
+        if new_plate:
+            clash = _find_plate_conflict(new_plate, exclude_visitor_id=vid)
+            if clash:
+                return jsonify({"status": "error",
+                                "message": f"Plate {new_plate} is already registered to {clash[1]} ({clash[0]})."}), 400
+        row.number_plate = new_plate
+    if 'contact' in d:
+        new_contact = (d.get('contact') or '').strip() or None
+        if new_contact:
+            clash = _find_phone_conflict(new_contact, exclude_visitor_id=vid)
+            if clash:
+                return jsonify({"status": "error",
+                                "message": f"Phone {new_contact} is already registered to {clash[1]} ({clash[0]})."}), 400
+        row.contact = new_contact
     if 'purpose'       in d: row.purpose       = (d.get('purpose') or '').strip() or None
     if 'host_employee' in d: row.host_employee = (d.get('host_employee') or '').strip() or None
     db.session.commit()
@@ -3579,6 +3644,61 @@ def api_visitors_update(vid):
 
 
 # ── Visitors (time-bound temporary access) ───────────────────────────────────
+# ── Uniqueness helpers (phone + plate are 1:1 with a person) ─────────────────
+# A phone or plate identifies a person. The same value living on two records
+# is almost always a data-entry mistake (or fraud), so reject it with a clear
+# "already used by X" error. Checks span BOTH whitelist and visitors so a
+# member's plate can't reappear as someone else's visitor pass either.
+def _digits_only(s):
+    return ''.join(c for c in (s or '') if c.isdigit())
+
+
+def _find_phone_conflict(phone, exclude_visitor_id=None, exclude_member_id=None):
+    """Return (kind, name) for whoever already uses this phone, else None."""
+    digits = _digits_only(phone)
+    if len(digits) < 7:
+        return None
+    # Members (whitelist.contact_number)
+    members = Whitelist.query.filter(Whitelist.contact_number.isnot(None))
+    if exclude_member_id is not None:
+        members = members.filter(Whitelist.id != exclude_member_id)
+    for w in members.all():
+        if _digits_only(w.contact_number) == digits:
+            return ('member', w.owner_name or f'member #{w.id}')
+    # Visitors (visitors.contact)
+    visitors = Visitor.query.filter(Visitor.contact.isnot(None))
+    if exclude_visitor_id is not None:
+        visitors = visitors.filter(Visitor.id != exclude_visitor_id)
+    for v in visitors.all():
+        if _digits_only(v.contact) == digits:
+            return ('visitor', v.name or f'visitor #{v.id}')
+    return None
+
+
+def _find_plate_conflict(plate, exclude_visitor_id=None, exclude_member_id=None):
+    """Return (kind, name) for whoever already uses this plate, else None."""
+    if not plate:
+        return None
+    plate = plate.strip().upper()
+    if not plate:
+        return None
+    # Members
+    q = Whitelist.query.filter(db.func.upper(Whitelist.number_plate) == plate)
+    if exclude_member_id is not None:
+        q = q.filter(Whitelist.id != exclude_member_id)
+    w = q.first()
+    if w:
+        return ('member', w.owner_name or f'member #{w.id}')
+    # Visitors
+    q = Visitor.query.filter(db.func.upper(Visitor.number_plate) == plate)
+    if exclude_visitor_id is not None:
+        q = q.filter(Visitor.id != exclude_visitor_id)
+    v = q.first()
+    if v:
+        return ('visitor', v.name or f'visitor #{v.id}')
+    return None
+
+
 @app.route('/api/visitors', methods=['GET', 'POST'])
 @login_required
 def api_visitors():
@@ -3588,6 +3708,17 @@ def api_visitors():
         plate = clean_plate_number(data.get('number_plate') or '')
         if not name or not plate:
             return jsonify({"status": "error", "message": "name and plate required"}), 400
+        # Uniqueness: phone + plate each belong to exactly one person.
+        contact_in = (data.get('contact') or '').strip()
+        clash = _find_plate_conflict(plate)
+        if clash:
+            return jsonify({"status": "error",
+                            "message": f"Plate {plate} is already registered to {clash[1]} ({clash[0]}). "
+                                       f"Edit that record instead of creating a new one."}), 400
+        clash = _find_phone_conflict(contact_in)
+        if clash:
+            return jsonify({"status": "error",
+                            "message": f"Phone {contact_in} is already registered to {clash[1]} ({clash[0]})."}), 400
         # Accept ISO ('YYYY-MM-DDTHH:MM') or 'YYYY-MM-DD HH:MM' for start/end.
         def _parse(s, default=None):
             if not s:
