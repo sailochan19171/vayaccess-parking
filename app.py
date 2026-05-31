@@ -2176,11 +2176,16 @@ def seed_defaults():
         Setting.set('default_entry_zone', 'GMR Cargo Staff Parking')
 
     # ── Seed initial admin account ───────────────────────────────────────────
-    # Without this, the first deploy has zero accounts and nobody can log in.
+    # Fires whenever NO account has a usable password_hash. Covers:
+    #   * fresh install (zero accounts)
+    #   * migration case where accounts exist from before the auth feature
+    #     shipped (rows with password_hash = NULL — none of them can log in)
     # Reads INITIAL_ADMIN_USER / INITIAL_ADMIN_PASSWORD env vars (override on
-    # Render). Defaults to admin/admin with a console warning — change it
-    # right after the first login via the Change Password button.
-    if Account.query.count() == 0:
+    # Render). Defaults to admin/admin with a console warning.
+    has_login_capable_account = (
+        Account.query.filter(Account.password_hash.isnot(None)).count() > 0
+    )
+    if not has_login_capable_account:
         # Make sure the "Administrator" role exists so the admin_required
         # decorator can recognise it.
         if not Role.query.filter(db.func.lower(Role.name) == 'administrator').first():
@@ -2189,17 +2194,27 @@ def seed_defaults():
             db.session.commit()
         admin_user = os.environ.get('INITIAL_ADMIN_USER', 'admin').strip() or 'admin'
         admin_pass = os.environ.get('INITIAL_ADMIN_PASSWORD', 'admin').strip() or 'admin'
-        a = Account(name=admin_user, nickname='Initial Admin', role='Administrator')
-        a.set_password(admin_pass)
-        db.session.add(a)
+        # Reuse an existing row with the same name (e.g. one created from the
+        # CRUD UI before passwords were a thing) instead of duplicating it.
+        existing = Account.query.filter(
+            db.func.lower(Account.name) == admin_user.lower()).first()
+        if existing:
+            existing.role = 'Administrator'
+            existing.set_password(admin_pass)
+            action = 'updated'
+        else:
+            a = Account(name=admin_user, nickname='Initial Admin', role='Administrator')
+            a.set_password(admin_pass)
+            db.session.add(a)
+            action = 'seeded'
         db.session.commit()
-        AuditEvent.log(f"Seeded initial admin account: {admin_user}", area='System')
+        AuditEvent.log(f"Initial admin {action}: {admin_user}", area='System')
         if admin_pass == 'admin':
             print("[SECURITY] WARNING: initial admin password is the default 'admin'. "
                   "Log in and change it immediately, or set INITIAL_ADMIN_PASSWORD "
                   "env var before first boot.")
         else:
-            print(f"[OK] Seeded initial admin: {admin_user}")
+            print(f"[OK] Initial admin {action}: {admin_user}")
 
     # One-shot retag: collapse all legacy multi-zone values to the single
     # configured zone ('GMR Cargo Staff Parking'). Runs once, guarded by a
