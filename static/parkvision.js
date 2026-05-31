@@ -3512,8 +3512,112 @@ function _parseCSV(text) {
   });
 }
 
+// Per-import-type schema. Each column lists its accepted header aliases
+// (case-insensitive), whether it's required, and a validator key.
+const _bulkImportSchemas = {
+  vis: {
+    label: 'visitor',
+    columns: {
+      name:          { aliases: ['name'],                          required: true,  type: 'text' },
+      number_plate:  { aliases: ['number_plate', 'plate'],         required: false, type: 'plate' },
+      contact:       { aliases: ['contact'],                       required: false, type: 'phone' },
+      purpose:       { aliases: ['purpose'],                       required: false, type: 'text' },
+      host_employee: { aliases: ['host_employee', 'host'],         required: false, type: 'text' },
+      valid_from:    { aliases: ['valid_from'],                    required: false, type: 'datetime' },
+      valid_to:      { aliases: ['valid_to'],                      required: false, type: 'datetime' },
+    },
+  },
+  mm: {
+    label: 'member',
+    columns: {
+      owner_name:        { aliases: ['owner_name', 'name'],            required: true,  type: 'text' },
+      number_plate:      { aliases: ['number_plate', 'plate'],         required: true,  type: 'plate' },
+      rfid_tag:          { aliases: ['rfid_tag', 'tag'],               required: false, type: 'text' },
+      department:        { aliases: ['department'],                    required: false, type: 'text' },
+      contact_number:    { aliases: ['contact_number', 'contact'],     required: false, type: 'phone' },
+      vehicle_type:      { aliases: ['vehicle_type', 'type'],          required: false, type: 'vehicle' },
+      activation_months: { aliases: ['activation_months', 'months'],   required: false, type: 'months' },
+      payment_amount:    { aliases: ['payment_amount', 'amount'],      required: false, type: 'amount' },
+    },
+  },
+};
+
+// Validators return null on success or a short error message on failure.
+const _bulkValidators = {
+  text:     (v) => v.length > 0 ? null : 'must not be empty',
+  plate:    (v) => /^[A-Z0-9\-\s]{4,15}$/i.test(v) ? null : 'must look like a plate (4–15 letters/digits, e.g. TS09AB1234)',
+  phone:    (v) => /^[+0-9\s\-]{7,20}$/.test(v) ? null : 'must be 7–20 digits (with optional + - space)',
+  datetime: (v) => /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(v) ? null : 'must be YYYY-MM-DD or YYYY-MM-DD HH:MM',
+  vehicle:  (v) => /^(Car|Bike)$/i.test(v) ? null : 'must be "Car" or "Bike"',
+  months:   (v) => { const n = parseInt(v, 10); return (!isNaN(n) && n >= 1 && n <= 60) ? null : 'must be an integer between 1 and 60'; },
+  amount:   (v) => { const n = parseInt(v, 10); return (!isNaN(n) && n >= 0) ? null : 'must be a non-negative integer (in INR)'; },
+};
+
+function _validateBulkRows(key, headerRow, rows) {
+  const schema = _bulkImportSchemas[key]; if (!schema) return { errors: [], warnings: [] };
+  const errors = [], warnings = [];
+  const headerLC = headerRow.map(h => (h || '').trim().toLowerCase());
+
+  // Map canonical field names -> actual header strings present in the CSV.
+  const fieldToHeader = {};
+  const allAliasesLC = new Set();
+  for (const [field, cfg] of Object.entries(schema.columns)) {
+    for (const alias of cfg.aliases) allAliasesLC.add(alias.toLowerCase());
+    const idx = cfg.aliases
+      .map(a => headerLC.indexOf(a.toLowerCase()))
+      .find(i => i >= 0);
+    if (idx !== undefined && idx >= 0) {
+      fieldToHeader[field] = headerRow[idx];
+    }
+  }
+
+  // 1. Required columns must be in the header.
+  for (const [field, cfg] of Object.entries(schema.columns)) {
+    if (cfg.required && !fieldToHeader[field]) {
+      errors.push({ row: 0, column: field, message: `required column "${field}" not in CSV header` });
+    }
+  }
+
+  // 2. Unknown columns -> warning (we'll ignore them, but tell the user).
+  headerRow.forEach((h) => {
+    const lc = (h || '').trim().toLowerCase();
+    if (lc && !allAliasesLC.has(lc)) {
+      warnings.push({ row: 0, column: h, message: `unknown column "${h}" — will be ignored` });
+    }
+  });
+
+  // 3. Per-row data-type validation.
+  rows.forEach((row, idx) => {
+    const rowNum = idx + 2;   // +1 for 0-index, +1 for the header line
+    for (const [field, cfg] of Object.entries(schema.columns)) {
+      const h = fieldToHeader[field];
+      const val = h ? String(row[h] ?? '').trim() : '';
+      if (!val) {
+        if (cfg.required) errors.push({ row: rowNum, column: field, message: 'required, but empty' });
+        continue;
+      }
+      const v = _bulkValidators[cfg.type];
+      const err = v ? v(val) : null;
+      if (err) errors.push({ row: rowNum, column: field, message: `${err} (got "${val}")` });
+    }
+  });
+
+  return { errors, warnings };
+}
+
+function _formatBulkIssues(label, issues, max) {
+  const lines = issues.slice(0, max).map(e =>
+    e.row === 0
+      ? `• ${label} — "${e.column}": ${e.message}`
+      : `• Row ${e.row}, "${e.column}": ${e.message}`
+  );
+  if (issues.length > max) lines.push(`…and ${issues.length - max} more`);
+  return lines.join('\n');
+}
+
 function bulkImport(key) {
   const cfg = _bulkImportable[key]; if (!cfg) return;
+  const schema = _bulkImportSchemas[key];
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.csv,text/csv';
@@ -3522,8 +3626,34 @@ function bulkImport(key) {
     try {
       const text = await file.text();
       const rows = _parseCSV(text);
-      if (!rows.length) { toast('CSV is empty', 'err'); return; }
-      if (!confirm(`Import ${rows.length} row(s) from "${file.name}"?`)) return;
+      if (!rows.length) { alert('CSV is empty — nothing to import.'); return; }
+
+      // Schema validation BEFORE we send anything to the server.
+      const headerRow = Object.keys(rows[0] || {});
+      const { errors, warnings } = _validateBulkRows(key, headerRow, rows);
+
+      if (errors.length) {
+        const errBlock = _formatBulkIssues('Header', errors, 20);
+        alert(
+          `Cannot import — ${errors.length} validation error(s) in "${file.name}":\n\n` +
+          errBlock + '\n\n' +
+          `Please fix these in your CSV and try again.\n\n` +
+          `Expected columns for ${schema.label} import:\n` +
+          Object.entries(schema.columns)
+            .map(([f, c]) => `  ${c.required ? '* ' : '  '}${f}${c.aliases.length > 1 ? ' (or ' + c.aliases.slice(1).join('/') + ')' : ''} — ${c.type}`)
+            .join('\n')
+        );
+        return;
+      }
+
+      // Soft warnings (unknown columns) — show before confirm but don't block.
+      let confirmMsg = `Import ${rows.length} ${schema.label} row(s) from "${file.name}"?`;
+      if (warnings.length) {
+        confirmMsg = `Warning — ${warnings.length} issue(s) found:\n\n` +
+                     _formatBulkIssues('Header', warnings, 10) + '\n\n' + confirmMsg;
+      }
+      if (!confirm(confirmMsg)) return;
+
       toast(`📤 Importing ${rows.length} row(s)…`, 'ok');
       const r = await fetch(cfg.url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3531,12 +3661,19 @@ function bulkImport(key) {
       });
       const js = await r.json();
       if (r.ok && js.status === 'ok') {
-        toast(`✓ Imported ${js.imported}, skipped ${js.skipped}`, 'ok');
+        const skippedNote = js.skipped ? ` (server rejected ${js.skipped})` : '';
+        toast(`✓ Imported ${js.imported}${skippedNote}`, 'ok');
         _liveLoaders[cfg.loader]?.();
+      } else if (r.status === 401) {
+        alert('Login required — your session has expired. Sign in again to bulk import.');
+      } else if (r.status === 403) {
+        alert('Access denied — bulk import requires an Administrator account.');
       } else {
-        toast('✗ ' + (js.message || 'Import failed'), 'err');
+        alert('✗ Import failed: ' + (js.message || `HTTP ${r.status}`));
       }
-    } catch (e) { toast('✗ Could not read CSV', 'err'); }
+    } catch (e) {
+      alert('✗ Could not read CSV: ' + (e.message || 'unknown error'));
+    }
   };
   input.click();
 }
