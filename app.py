@@ -13,7 +13,8 @@ if not CLOUD_MODE:
     # with minimum buffering. Only relevant when the camera_loop will run.
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|flags;low_delay|stimeout;5000000"
 
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, session, redirect, url_for
+from functools import wraps
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
                       Account, Role, DictionaryEntry, LCDScreen,
@@ -54,6 +55,11 @@ else:
     cv2 = easyocr = np = YOLO = torch = concurrent = None
 
 app = Flask(__name__)
+# Required to use Flask sessions for login. In production the real secret MUST
+# be set via the SECRET_KEY environment variable (Render/Fly/Koyeb dashboard);
+# the fallback is only here so local dev boots without configuration. Rotate
+# this default before going to production — sessions can be forged otherwise.
+app.secret_key = os.environ.get('SECRET_KEY', 'vayaccess-default-secret-CHANGE-ME-IN-PROD')
 
 # DB connection. The real Neon URL is NEVER hardcoded here — this file is
 # committed to a public GitHub repo. Set DATABASE_URL via:
@@ -1558,11 +1564,92 @@ def process_static_frame(frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Auth: session + RBAC decorators
+# ─────────────────────────────────────────────────────────────────────────────
+# Two decorators wrap protected routes:
+#   • login_required  — any logged-in account
+#   • admin_required  — login + role == 'Administrator' (case-insensitive)
+# For /api/* routes a missing session returns JSON 401 so the frontend can
+# react cleanly. For HTML routes it redirects to /login.
+def _is_api(path):
+    return path.startswith('/api/')
+
+def login_required(fn):
+    @wraps(fn)
+    def _wrapped(*args, **kwargs):
+        if not session.get('user_id'):
+            if _is_api(request.path):
+                return jsonify({"error": "login_required"}), 401
+            return redirect(url_for('login_page'))
+        return fn(*args, **kwargs)
+    return _wrapped
+
+def admin_required(fn):
+    @wraps(fn)
+    def _wrapped(*args, **kwargs):
+        if not session.get('user_id'):
+            if _is_api(request.path):
+                return jsonify({"error": "login_required"}), 401
+            return redirect(url_for('login_page'))
+        role = (session.get('user_role') or '').strip().lower()
+        if role != 'administrator':
+            if _is_api(request.path):
+                return jsonify({"error": "admin_required",
+                                "message": "Administrator role required"}), 403
+            return redirect(url_for('login_page'))
+        return fn(*args, **kwargs)
+    return _wrapped
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Flask Routes
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+# ── Login page + session API ────────────────────────────────────────────────
+@app.route('/login')
+def login_page():
+    return render_template('login.html')
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    d = request.json or {}
+    username = (d.get('username') or '').strip()
+    password = d.get('password') or ''
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+    user = Account.query.filter(db.func.lower(Account.name) == username.lower()).first()
+    if not user or not user.check_password(password):
+        return jsonify({"error": "Invalid credentials"}), 401
+    session['user_id']   = user.id
+    session['user_name'] = user.name
+    session['user_role'] = user.role or ''
+    AuditEvent.log(f"Login: {user.name}", area='Auth')
+    return jsonify({"ok": True, "user": {
+        "id": user.id, "name": user.name, "role": user.role or "",
+    }})
+
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    name = session.get('user_name')
+    session.clear()
+    if name:
+        AuditEvent.log(f"Logout: {name}", area='Auth')
+    return jsonify({"ok": True})
+
+@app.route('/api/me')
+def api_me():
+    if not session.get('user_id'):
+        return jsonify({"logged_in": False})
+    return jsonify({
+        "logged_in": True,
+        "id":   session.get('user_id'),
+        "name": session.get('user_name'),
+        "role": session.get('user_role') or '',
+    })
 
 # 1×1 transparent PNG — used in CLOUD_MODE where there is no camera frame.
 # The HTML <img id="anpr-stream"> stays valid (no broken-image icon) and the
@@ -1598,6 +1685,7 @@ def get_state():
     return jsonify(dashboard_state)
 
 @app.route('/api/whitelist', methods=['GET', 'POST'])
+@login_required
 def handle_whitelist():
     if request.method == 'POST':
         data = request.json
@@ -1688,6 +1776,7 @@ def get_logs():
         return jsonify({"status": "error", "message": str(e)}), 400
 
 @app.route('/api/config', methods=['GET', 'POST'])
+@admin_required
 def handle_config():
     if request.method == 'POST':
         data = request.json
@@ -1704,6 +1793,7 @@ def handle_config():
     return jsonify({"camera_source": source})
 
 @app.route('/api/test_image', methods=['POST'])
+@admin_required
 def test_image():
     if CLOUD_MODE:
         return jsonify({"status": "error", "message": "Disabled in cloud mode (no ANPR pipeline)"}), 503
@@ -1722,6 +1812,7 @@ def test_image():
     return jsonify({"status": "success"})
 
 @app.route('/api/resume_feed', methods=['POST'])
+@admin_required
 def resume_feed():
     global freeze_feed
     freeze_feed = False
@@ -1775,6 +1866,7 @@ def api_desktop_reader_ports():
     return jsonify(list_available_ports())
 
 @app.route('/api/desktop_reader/configure', methods=['POST'])
+@admin_required
 def api_desktop_reader_configure():
     if CLOUD_MODE:
         return jsonify({"status": "error", "message": "No COM ports in cloud mode"}), 503
@@ -1787,11 +1879,13 @@ def api_desktop_reader_configure():
     return jsonify({"status": "ok", "port": port, "baudrate": baud})
 
 @app.route('/api/desktop_reader/clear', methods=['POST'])
+@admin_required
 def api_desktop_reader_clear():
     desktop_rfid.clear_latest_tag()
     return jsonify({"status": "ok"})
 
 @app.route('/api/employees', methods=['GET', 'POST'])
+@login_required
 def api_employees():
     """Employee enrollment endpoint. POST activates a tag with employee info;
     GET lists all activated employees (whitelist rows with department set)."""
@@ -1963,6 +2057,7 @@ def api_employees():
 
 
 @app.route('/api/employees/renew', methods=['POST'])
+@login_required
 def api_employee_renew():
     """Renew (extend validity) for an existing employee. Requires:
       - rfid_tag: the existing tag to renew
@@ -2080,6 +2175,32 @@ def seed_defaults():
     if Setting.get('default_entry_zone') is None:
         Setting.set('default_entry_zone', 'GMR Cargo Staff Parking')
 
+    # ── Seed initial admin account ───────────────────────────────────────────
+    # Without this, the first deploy has zero accounts and nobody can log in.
+    # Reads INITIAL_ADMIN_USER / INITIAL_ADMIN_PASSWORD env vars (override on
+    # Render). Defaults to admin/admin with a console warning — change it
+    # right after the first login via the Change Password button.
+    if Account.query.count() == 0:
+        # Make sure the "Administrator" role exists so the admin_required
+        # decorator can recognise it.
+        if not Role.query.filter(db.func.lower(Role.name) == 'administrator').first():
+            db.session.add(Role(name='Administrator',
+                                description='Full system access (seeded on first boot)'))
+            db.session.commit()
+        admin_user = os.environ.get('INITIAL_ADMIN_USER', 'admin').strip() or 'admin'
+        admin_pass = os.environ.get('INITIAL_ADMIN_PASSWORD', 'admin').strip() or 'admin'
+        a = Account(name=admin_user, nickname='Initial Admin', role='Administrator')
+        a.set_password(admin_pass)
+        db.session.add(a)
+        db.session.commit()
+        AuditEvent.log(f"Seeded initial admin account: {admin_user}", area='System')
+        if admin_pass == 'admin':
+            print("[SECURITY] WARNING: initial admin password is the default 'admin'. "
+                  "Log in and change it immediately, or set INITIAL_ADMIN_PASSWORD "
+                  "env var before first boot.")
+        else:
+            print(f"[OK] Seeded initial admin: {admin_user}")
+
     # One-shot retag: collapse all legacy multi-zone values to the single
     # configured zone ('GMR Cargo Staff Parking'). Runs once, guarded by a
     # setting. Old zones like 'Auto Gate', 'Basement A', etc. become one
@@ -2125,6 +2246,7 @@ def seed_defaults():
 
 # ── Tariffs ──────────────────────────────────────────────────────────────────
 @app.route('/api/tariffs', methods=['GET', 'POST'])
+@login_required
 def api_tariffs():
     if request.method == 'POST':
         data = request.json or {}
@@ -2153,6 +2275,7 @@ def api_tariffs():
 
 
 @app.route('/api/tariffs/<int:tid>', methods=['DELETE'])
+@login_required
 def api_tariff_delete(tid):
     row = Tariff.query.get(tid)
     if not row:
@@ -2188,6 +2311,7 @@ def api_transactions():
 
 
 @app.route('/api/entries', methods=['POST'])
+@login_required
 def api_entry_create():
     data = request.json or {}
     veh = (data.get('vehicle') or '').strip().upper()
@@ -2248,6 +2372,7 @@ def _compute_bill(tx: ParkingTransaction, lost: bool):
 
 
 @app.route('/api/exits', methods=['POST'])
+@login_required
 def api_exit_close():
     """Strict exit: must match an ACTIVE transaction by EXACT plate or EXACT
     tag (not partial contains) AND optionally by zone. Wrong plate/tag = 404.
@@ -2329,6 +2454,7 @@ def api_exit_close():
 
 # ── Settings (capacity, backup schedule) ─────────────────────────────────────
 @app.route('/api/settings', methods=['GET', 'POST'])
+@admin_required
 def api_settings():
     # Basic facility settings + Entry/Exit settings share the key/value Setting
     # store. The UI splits them into two pages (Basic Settings, Entry/Exit
@@ -2384,6 +2510,7 @@ def api_dashboard_metrics():
 
 # ── Audit trail ──────────────────────────────────────────────────────────────
 @app.route('/api/audit')
+@admin_required
 def api_audit():
     try:
         limit = min(int(request.args.get('limit', 50)), 500)
@@ -2479,6 +2606,7 @@ def api_devices():
 
 # ── Blacklist (banned plates / tags) ─────────────────────────────────────────
 @app.route('/api/blacklist', methods=['GET', 'POST'])
+@login_required
 def api_blacklist():
     if request.method == 'POST':
         data = request.json or {}
@@ -2510,6 +2638,7 @@ def api_blacklist():
 
 
 @app.route('/api/blacklist/<int:bid>', methods=['DELETE'])
+@login_required
 def api_blacklist_delete(bid):
     row = Blacklist.query.get(bid)
     if not row:
@@ -2566,6 +2695,7 @@ def api_orders():
 
 # ── Yards (parking lots) ─────────────────────────────────────────────────────
 @app.route('/api/yards', methods=['GET', 'POST'])
+@admin_required
 def api_yards():
     if request.method == 'POST':
         data = request.json or {}
@@ -2589,6 +2719,7 @@ def api_yards():
 
 
 @app.route('/api/yards/<int:yid>', methods=['DELETE'])
+@admin_required
 def api_yards_delete(yid):
     row = Yard.query.get(yid)
     if not row:
@@ -2602,6 +2733,7 @@ def api_yards_delete(yid):
 
 # ── Regions (group of yards) ─────────────────────────────────────────────────
 @app.route('/api/regions', methods=['GET', 'POST'])
+@admin_required
 def api_regions():
     if request.method == 'POST':
         data = request.json or {}
@@ -2620,6 +2752,7 @@ def api_regions():
 
 
 @app.route('/api/regions/<int:rid>', methods=['DELETE'])
+@admin_required
 def api_regions_delete(rid):
     row = Region.query.get(rid)
     if not row:
@@ -2633,6 +2766,7 @@ def api_regions_delete(rid):
 
 # ── System Management: Accounts ──────────────────────────────────────────────
 @app.route('/api/accounts', methods=['GET', 'POST'])
+@admin_required
 def api_accounts():
     if request.method == 'POST':
         data = request.json or {}
@@ -2641,10 +2775,25 @@ def api_accounts():
             return jsonify({"status": "error", "message": "Account name is required"}), 400
         if Account.query.filter(db.func.lower(Account.name) == name.lower()).first():
             return jsonify({"status": "error", "message": f"Account '{name}' already exists"}), 400
-        db.session.add(Account(name=name,
-                               nickname=(data.get('nickname') or '').strip() or None,
-                               contact=(data.get('contact') or '').strip() or None,
-                               role=(data.get('role') or '').strip() or None))
+        # Optional password on create — if either field is present, both must
+        # be present and match. Allowing creation without a password lets an
+        # admin set it later via PUT (useful for bulk import scenarios).
+        pwd  = data.get('password')
+        pwd2 = data.get('password_confirm')
+        if pwd or pwd2:
+            if (pwd or '') != (pwd2 or ''):
+                return jsonify({"status": "error",
+                                "message": "Passwords do not match"}), 400
+            if len(pwd or '') < 4:
+                return jsonify({"status": "error",
+                                "message": "Password must be at least 4 characters"}), 400
+        acc = Account(name=name,
+                      nickname=(data.get('nickname') or '').strip() or None,
+                      contact=(data.get('contact') or '').strip() or None,
+                      role=(data.get('role') or '').strip() or None)
+        if pwd:
+            acc.set_password(pwd)
+        db.session.add(acc)
         db.session.commit()
         AuditEvent.log(f"Account added: {name}", area='System')
         return jsonify({"status": "ok"})
@@ -2652,6 +2801,7 @@ def api_accounts():
 
 
 @app.route('/api/accounts/<int:aid>', methods=['DELETE'])
+@admin_required
 def api_accounts_delete(aid):
     row = Account.query.get(aid)
     if not row:
@@ -2663,6 +2813,7 @@ def api_accounts_delete(aid):
 
 # ── System Management: Roles ─────────────────────────────────────────────────
 @app.route('/api/roles', methods=['GET', 'POST'])
+@admin_required
 def api_roles():
     if request.method == 'POST':
         data = request.json or {}
@@ -2680,6 +2831,7 @@ def api_roles():
 
 
 @app.route('/api/roles/<int:rid>', methods=['DELETE'])
+@admin_required
 def api_roles_delete(rid):
     row = Role.query.get(rid)
     if not row:
@@ -2691,6 +2843,7 @@ def api_roles_delete(rid):
 
 # ── System Management: Dictionary ────────────────────────────────────────────
 @app.route('/api/dictionary', methods=['GET', 'POST'])
+@admin_required
 def api_dictionary():
     if request.method == 'POST':
         data = request.json or {}
@@ -2709,6 +2862,7 @@ def api_dictionary():
 
 
 @app.route('/api/dictionary/<int:did>', methods=['DELETE'])
+@admin_required
 def api_dictionary_delete(did):
     row = DictionaryEntry.query.get(did)
     if not row:
@@ -2720,6 +2874,7 @@ def api_dictionary_delete(did):
 
 # ── System Management: LCD screens (entry/exit displays) ─────────────────────
 @app.route('/api/lcd', methods=['GET', 'POST'])
+@admin_required
 def api_lcd():
     if request.method == 'POST':
         data = request.json or {}
@@ -2739,6 +2894,7 @@ def api_lcd():
 
 
 @app.route('/api/lcd/<int:sid>', methods=['PUT'])
+@admin_required
 def api_lcd_update(sid):
     row = LCDScreen.query.get(sid)
     if not row:
@@ -2757,6 +2913,7 @@ def api_lcd_update(sid):
 
 
 @app.route('/api/lcd/<int:sid>', methods=['DELETE'])
+@admin_required
 def api_lcd_delete(sid):
     row = LCDScreen.query.get(sid)
     if not row:
@@ -2768,8 +2925,16 @@ def api_lcd_delete(sid):
 
 # ── System Management: Menu visibility per role ──────────────────────────────
 @app.route('/api/menu_permissions', methods=['GET', 'POST'])
+@login_required
 def api_menu_perms():
     if request.method == 'POST':
+        # GET is allowed for any logged-in user so the sidebar can self-filter,
+        # but writes must come from an admin. Inline check instead of stacking
+        # decorators because the GET branch is intentionally not admin-gated.
+        role_cur = (session.get('user_role') or '').strip().lower()
+        if role_cur != 'administrator':
+            return jsonify({"error": "admin_required",
+                            "message": "Administrator role required"}), 403
         d = request.json or {}
         role = (d.get('role_name') or '').strip()
         menu = (d.get('menu_key') or '').strip()
@@ -2791,6 +2956,7 @@ def api_menu_perms():
 
 
 @app.route('/api/menu_permissions/<int:mid>', methods=['DELETE'])
+@admin_required
 def api_menu_perms_delete(mid):
     row = MenuPermission.query.get(mid)
     if not row:
@@ -2802,6 +2968,7 @@ def api_menu_perms_delete(mid):
 
 # ── System Management: Role × Section permission grants ─────────────────────
 @app.route('/api/role_permissions', methods=['GET', 'POST'])
+@admin_required
 def api_role_perms():
     if request.method == 'POST':
         d = request.json or {}
@@ -2829,6 +2996,7 @@ def api_role_perms():
 
 
 @app.route('/api/role_permissions/<int:rid>', methods=['DELETE'])
+@admin_required
 def api_role_perms_delete(rid):
     row = RolePermission.query.get(rid)
     if not row:
@@ -2841,6 +3009,7 @@ def api_role_perms_delete(rid):
 # ── Edit (PUT) endpoints for the CRUD tables ─────────────────────────────────
 # Each updates only the fields present in the body, then returns the row.
 @app.route('/api/accounts/<int:aid>', methods=['PUT'])
+@admin_required
 def api_accounts_update(aid):
     row = Account.query.get(aid)
     if not row:
@@ -2854,12 +3023,25 @@ def api_accounts_update(aid):
     if 'nickname' in d: row.nickname = (d.get('nickname') or '').strip() or None
     if 'contact'  in d: row.contact  = (d.get('contact')  or '').strip() or None
     if 'role'     in d: row.role     = (d.get('role')     or '').strip() or None
+    # Password change support — same validation rules as the Add form.
+    pwd  = d.get('password')
+    pwd2 = d.get('password_confirm')
+    if pwd or pwd2:
+        if (pwd or '') != (pwd2 or ''):
+            return jsonify({"status": "error",
+                            "message": "Passwords do not match"}), 400
+        if len(pwd or '') < 4:
+            return jsonify({"status": "error",
+                            "message": "Password must be at least 4 characters"}), 400
+        row.set_password(pwd)
+        AuditEvent.log(f"Account password changed: {row.name}", area='Auth')
     db.session.commit()
     AuditEvent.log(f"Account updated: {row.name}", area='System')
     return jsonify({"status": "ok", "account": row.to_dict()})
 
 
 @app.route('/api/roles/<int:rid>', methods=['PUT'])
+@admin_required
 def api_roles_update(rid):
     row = Role.query.get(rid)
     if not row:
@@ -2877,6 +3059,7 @@ def api_roles_update(rid):
 
 
 @app.route('/api/dictionary/<int:did>', methods=['PUT'])
+@admin_required
 def api_dictionary_update(did):
     row = DictionaryEntry.query.get(did)
     if not row:
@@ -2899,6 +3082,7 @@ def api_dictionary_update(did):
 
 
 @app.route('/api/yards/<int:yid>', methods=['PUT'])
+@admin_required
 def api_yards_update(yid):
     row = Yard.query.get(yid)
     if not row:
@@ -2922,6 +3106,7 @@ def api_yards_update(yid):
 
 
 @app.route('/api/regions/<int:rid>', methods=['PUT'])
+@admin_required
 def api_regions_update(rid):
     row = Region.query.get(rid)
     if not row:
@@ -3140,6 +3325,7 @@ def api_employee_pass_url(eid):
 # Accepts an array of row dicts (parsed client-side from a CSV file). Each row
 # becomes a new Visitor / Whitelist entry. Returns counts of imported / skipped.
 @app.route('/api/bulk_import/visitors', methods=['POST'])
+@admin_required
 def api_bulk_import_visitors():
     rows = (request.json or {}).get('rows') or []
     ok = err = 0
@@ -3176,6 +3362,7 @@ def api_bulk_import_visitors():
 
 
 @app.route('/api/bulk_import/members', methods=['POST'])
+@admin_required
 def api_bulk_import_members():
     """Bulk-create Whitelist rows. Each row needs at minimum: owner_name + plate.
     Payment / activation defaults are set so the rows pass the existing
@@ -3356,6 +3543,7 @@ def api_home_summary():
 
 
 @app.route('/api/visitors/<int:vid>', methods=['PUT'])
+@login_required
 def api_visitors_update(vid):
     row = Visitor.query.get(vid)
     if not row:
@@ -3377,6 +3565,7 @@ def api_visitors_update(vid):
 
 # ── Visitors (time-bound temporary access) ───────────────────────────────────
 @app.route('/api/visitors', methods=['GET', 'POST'])
+@login_required
 def api_visitors():
     if request.method == 'POST':
         data = request.json or {}
@@ -3418,6 +3607,7 @@ def api_visitors():
 
 
 @app.route('/api/visitors/<int:vid>', methods=['DELETE'])
+@login_required
 def api_visitors_delete(vid):
     row = Visitor.query.get(vid)
     if not row:
@@ -3431,6 +3621,7 @@ def api_visitors_delete(vid):
 
 # ── Entry-time-rule windows ──────────────────────────────────────────────────
 @app.route('/api/entry_windows', methods=['GET', 'POST'])
+@admin_required
 def api_entry_windows():
     """GET returns the configured blocked windows ('HH:MM-HH:MM,HH:MM-HH:MM').
     POST {'windows': '...'} replaces them. Empty string disables blocking."""

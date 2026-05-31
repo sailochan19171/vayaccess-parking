@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
@@ -87,6 +88,12 @@ def migrate_schema(engine):
         ("department",     "VARCHAR(100)"),
         ("contact_number", "VARCHAR(20)"),
     ]
+    # Accounts table: password_hash was added when the login system shipped —
+    # roll it onto existing Postgres deploys (db.create_all skips the column
+    # because the table already exists).
+    accounts_new = [
+        ("password_hash", "VARCHAR(255)"),
+    ]
 
     def _existing_cols(conn, table):
         if dialect == 'sqlite':
@@ -99,9 +106,15 @@ def migrate_schema(engine):
         return {r[0] for r in rows}
 
     with engine.connect() as conn:
-        for table, cols in (('whitelist', whitelist_new),
-                            ('access_logs', access_logs_new)):
+        for table, cols in (('whitelist',   whitelist_new),
+                            ('access_logs', access_logs_new),
+                            ('accounts',    accounts_new)):
             existing = _existing_cols(conn, table)
+            # Skip tables that don't exist yet — db.create_all() (called right
+            # after migrate_schema) will create them with the full column set,
+            # so ALTER TABLE would fail with no benefit.
+            if not existing:
+                continue
             for col, ctype in cols:
                 if col not in existing:
                     # IF NOT EXISTS works on both modern SQLite and Postgres,
@@ -364,12 +377,26 @@ class Yard(db.Model):
 # New tables, created automatically by db.create_all() on deploy.
 class Account(db.Model):
     __tablename__ = 'accounts'
-    id         = db.Column(db.Integer, primary_key=True)
-    name       = db.Column(db.String(120), nullable=False)   # login / account name
-    nickname   = db.Column(db.String(120), nullable=True)
-    contact    = db.Column(db.String(60),  nullable=True)
-    role       = db.Column(db.String(80),  nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.now)
+    id            = db.Column(db.Integer, primary_key=True)
+    name          = db.Column(db.String(120), nullable=False)   # login / account name
+    nickname      = db.Column(db.String(120), nullable=True)
+    contact       = db.Column(db.String(60),  nullable=True)
+    role          = db.Column(db.String(80),  nullable=True)
+    # Password hash — nullable so legacy rows + admin-created accounts without
+    # an initial password still load. PBKDF2/scrypt via werkzeug.security
+    # (ships with Flask — no extra dependency). Never store raw passwords.
+    password_hash = db.Column(db.String(255), nullable=True)
+    created_at    = db.Column(db.DateTime, default=datetime.now)
+
+    def set_password(self, raw):
+        """Hash and store a new password. Pass empty/None to leave unchanged."""
+        if raw is None or raw == '':
+            return
+        self.password_hash = generate_password_hash(raw)
+
+    def check_password(self, raw):
+        """Constant-time check of a candidate password against the stored hash."""
+        return bool(self.password_hash) and check_password_hash(self.password_hash, raw)
 
     def to_dict(self):
         return {
@@ -378,6 +405,9 @@ class Account(db.Model):
             "nickname":  self.nickname or "",
             "contact":   self.contact or "",
             "role":      self.role or "",
+            # has_password flag lets the UI show whether the account can log in
+            # without ever exposing the hash itself.
+            "has_password": bool(self.password_hash),
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "",
         }
 

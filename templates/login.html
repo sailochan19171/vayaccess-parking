@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign In · VayAccess Systems</title>
+  <style>
+    /* Inline styles only — keeps the login page self-contained and
+       independent of styles.css (so a broken stylesheet can't lock
+       operators out). Mobile-friendly via the viewport meta + flex layout. */
+    :root {
+      --primary:    #1f73d4;
+      --primary-d:  #185ba9;
+      --bg:         #f4f6fb;
+      --panel:      #ffffff;
+      --text:       #1a2233;
+      --muted:      #6a7388;
+      --line:       #e2e6ee;
+      --danger:     #b74a42;
+      --shadow:     0 12px 32px rgba(15, 23, 42, 0.10);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #eef2fa 0%, #f8faff 100%);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .login-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 36px 30px 28px;
+      width: 100%;
+      max-width: 380px;
+    }
+    .brand {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px; height: 56px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #1f73d4, #185ba9);
+      color: #fff;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      margin-bottom: 14px;
+    }
+    .brand h1 {
+      margin: 0 0 4px;
+      font-size: 1.35em;
+      font-weight: 700;
+    }
+    .brand p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.86em;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    form { display: flex; flex-direction: column; gap: 14px; }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.78em;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    input[type="text"], input[type="password"] {
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      font-size: 1em;
+      color: var(--text);
+      background: #fafbfd;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(31, 115, 212, 0.15);
+      background: #fff;
+    }
+    button[type="submit"] {
+      margin-top: 8px;
+      padding: 12px 16px;
+      background: var(--primary);
+      color: #fff;
+      border: 0;
+      border-radius: 9px;
+      font-size: 1em;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.05s;
+    }
+    button[type="submit"]:hover  { background: var(--primary-d); }
+    button[type="submit"]:active { transform: translateY(1px); }
+    button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error-box {
+      display: none;
+      margin: -4px 0 4px;
+      padding: 10px 12px;
+      background: rgba(183, 74, 66, 0.08);
+      border: 1px solid rgba(183, 74, 66, 0.35);
+      border-radius: 9px;
+      color: var(--danger);
+      font-size: 0.88em;
+    }
+    .error-box.show { display: block; }
+    .help {
+      text-align: center;
+      margin-top: 18px;
+      font-size: 0.82em;
+      color: var(--muted);
+    }
+    @media (max-width: 480px) {
+      .login-card { padding: 26px 20px 22px; border-radius: 12px; }
+      .brand h1 { font-size: 1.15em; }
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark">V</div>
+      <h1>VayAccess Systems</h1>
+      <p>Parking Control</p>
+    </div>
+
+    <div id="login-error" class="error-box" role="alert" aria-live="polite"></div>
+
+    <form id="login-form" autocomplete="on">
+      <label>Username
+        <input id="login-username" name="username" type="text"
+               autocomplete="username" required autofocus>
+      </label>
+      <label>Password
+        <input id="login-password" name="password" type="password"
+               autocomplete="current-password" required>
+      </label>
+      <button id="login-submit" type="submit">Sign in</button>
+    </form>
+
+    <p class="help">Forgot password? Contact admin.</p>
+  </div>
+
+  <script>
+    (function () {
+      const form  = document.getElementById('login-form');
+      const errEl = document.getElementById('login-error');
+      const btn   = document.getElementById('login-submit');
+
+      function showError(msg) {
+        errEl.textContent = msg;
+        errEl.classList.add('show');
+      }
+      function clearError() {
+        errEl.textContent = '';
+        errEl.classList.remove('show');
+      }
+
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        clearError();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        if (!username || !password) {
+          showError('Username and password are required.');
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Signing in…';
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: username, password: password }),
+          });
+          if (res.ok) {
+            // Redirect to the dashboard root; the dashboard pulls user info
+            // from /api/me on load to greet by name.
+            window.location.href = '/';
+            return;
+          }
+          let msg = 'Invalid username or password.';
+          try {
+            const js = await res.json();
+            if (js && js.error)   msg = js.error;
+            if (js && js.message) msg = js.message;
+          } catch (_) { /* keep default */ }
+          showError(msg);
+        } catch (err) {
+          showError('Network error — please try again.');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Sign in';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -3,6 +3,83 @@
  * Entry/Exit/Tariffs/Reports are scaffolded placeholders for now.
  */
 
+// ── Session gate ─────────────────────────────────────────────────────────────
+// Run BEFORE the rest of this file does any work. If /api/me reports the user
+// is not logged in and we're on the dashboard root, bounce to /login. We keep
+// this fire-and-forget — the rest of the page still hydrates, but any
+// protected /api/* calls will 401 and the user lands on /login almost
+// immediately anyway.
+window.__currentUser = null;
+(function _gateSession() {
+  const path = window.location.pathname || '/';
+  // /login and /v/* are public; never redirect them from here.
+  if (path === '/login' || path.indexOf('/v/') === 0) return;
+  fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' })
+    .then(r => r.ok ? r.json() : { logged_in: false })
+    .then(js => {
+      if (!js || js.logged_in !== true) {
+        // Only force the redirect on the dashboard root — sub-pages may be
+        // served standalone (e.g. /activate) and shouldn't be hijacked.
+        if (path === '/') window.location.href = '/login';
+        return;
+      }
+      window.__currentUser = { id: js.id, name: js.name, role: js.role || '' };
+      _hydrateTopbarUser();
+      // Sidebar filter runs after DOM is ready + currentUser known.
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyMenuPermissions);
+      } else {
+        applyMenuPermissions();
+      }
+    })
+    .catch(() => { /* network blip — skip silently */ });
+})();
+
+function _hydrateTopbarUser() {
+  const el = document.getElementById('topbar-username');
+  if (el && window.__currentUser) {
+    const u = window.__currentUser;
+    el.textContent = u.name + (u.role ? ' · ' + u.role : '');
+  }
+}
+
+// Logout button (in the fixed top-right chip). Posts to /api/logout then
+// hard-redirects to /login so the next page load starts in a clean session.
+document.addEventListener('DOMContentLoaded', function () {
+  const btn = document.getElementById('topbar-logout');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    try {
+      await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch (_) { /* even if the call fails, bounce to login */ }
+    window.location.href = '/login';
+  });
+});
+
+// applyMenuPermissions — hide sidebar items the current role isn't allowed
+// to see. Administrator bypasses entirely. Filter is best-effort: a missing
+// row defaults to allowed so an admin who hasn't configured permissions yet
+// still has a working UI.
+async function applyMenuPermissions() {
+  const cur = window.__currentUser;
+  if (!cur) return;
+  if ((cur.role || '').trim().toLowerCase() === 'administrator') return;
+  try {
+    const res = await fetch('/api/menu_permissions', { cache: 'no-store', credentials: 'same-origin' });
+    if (!res.ok) return;
+    const all = await res.json();
+    if (!Array.isArray(all)) return;
+    const blocked = new Set(
+      all.filter(p => (p.role_name || '').trim().toLowerCase() === (cur.role || '').trim().toLowerCase())
+         .filter(p => p.allowed === false)
+         .map(p => p.menu_key));
+    if (!blocked.size) return;
+    document.querySelectorAll('.nav-item[data-view]').forEach(btn => {
+      if (blocked.has(btn.dataset.view)) btn.style.display = 'none';
+    });
+  } catch (_) { /* ignore — sidebar stays open */ }
+}
+
 const $ = (id) => document.getElementById(id);
 
 // ── View switching (sidebar nav) ─────────────────────────────────────────────
@@ -16,6 +93,7 @@ function switchView(name) {
     video: 'Video Monitoring',       'parking-records': 'Parking Records',
     'scanning-record': 'Scanning Record', devices: 'Lane Monitoring',
     exit: 'Manual Exit Record',      orders: 'Order Management',
+    'manual-entry': 'Manual Entry',
     admin: 'Whitelist',              registered: 'Registered Vehicle',
     blacklist: 'Black List',         yard: 'Yard Management',
     region: 'Region Management',     entry: 'Entry', tariffs: 'Tariffs',
@@ -2673,11 +2751,37 @@ async function loadAccounts() {
       <td>${_esc(a.contact) || '—'}</td>
       <td>${_esc(a.role) || '—'}</td>
       <td>${_esc(a.created_at)}</td>
-      <td><button class="ghost-button" data-edit="${a.id}" data-edit-sec="acc" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button><button class="ghost-button acc-del" data-id="${a.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button></td>
+      <td>
+        <button class="ghost-button" data-edit="${a.id}" data-edit-sec="acc" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Edit</button>
+        <button class="ghost-button acc-pwd" data-id="${a.id}" data-name="${_esc(a.name)}" style="padding:4px 10px; font-size:0.8em; margin-right:4px;">Change Password</button>
+        <button class="ghost-button acc-del" data-id="${a.id}" style="padding:4px 10px; font-size:0.8em; color:#b74a42;">Delete</button>
+      </td>
     </tr>`, 6, (tb) => {
       tb.querySelectorAll('.acc-del').forEach(b => b.addEventListener('click', async () => {
         if (!confirm('Delete this account?')) return;
         await fetch(`/api/accounts/${b.dataset.id}`, { method: 'DELETE' }); loadAccounts();
+      }));
+      // Change Password: two prompts (new + confirm). window.prompt is OK
+      // per the task spec — keeps the row UI from getting cluttered.
+      tb.querySelectorAll('.acc-pwd').forEach(b => b.addEventListener('click', async () => {
+        const name = b.dataset.name || 'account';
+        const p1 = window.prompt(`Set new password for "${name}":`, '');
+        if (p1 === null) return;
+        if ((p1 || '').length < 4) { toast('✗ Password must be at least 4 characters', 'err'); return; }
+        const p2 = window.prompt('Re-enter new password to confirm:', '');
+        if (p2 === null) return;
+        if (p1 !== p2) { toast('✗ Passwords do not match', 'err'); return; }
+        try {
+          const r = await fetch(`/api/accounts/${b.dataset.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ password: p1, password_confirm: p2 }),
+          });
+          const js = await r.json();
+          if (r.ok && js.status === 'ok') toast('✓ Password updated', 'ok');
+          else toast('✗ ' + (js.message || 'Failed'), 'err');
+        } catch (_) { toast('✗ Network error', 'err'); }
       }));
     });
   } catch (e) { tb.innerHTML = _emptyRow(6, 'Failed to load.'); }
@@ -2747,9 +2851,23 @@ function _wireAddForm(formId, btnId, buildBody, url, okMsg, reload) {
     finally { btn.disabled = false; }
   });
 }
+// Client-side password match check — abort with a toast instead of letting
+// the request hit the server when the two fields differ. The server still
+// enforces this, but a snappy local check feels better.
+$('acc-form')?.addEventListener('submit', function (e) {
+  const p1 = $('acc-password')?.value || '';
+  const p2 = $('acc-password2')?.value || '';
+  if (p1 || p2) {
+    if (p1 !== p2) { e.preventDefault(); e.stopImmediatePropagation(); toast('✗ Passwords do not match', 'err'); return; }
+    if (p1.length < 4) { e.preventDefault(); e.stopImmediatePropagation(); toast('✗ Password must be at least 4 characters', 'err'); return; }
+  }
+}, true);  // capture phase — runs before _wireAddForm's submit handler
+
 _wireAddForm('acc-form', 'acc-submit', () => ({
   name: $('acc-name').value.trim(), nickname: $('acc-nick').value.trim(),
   contact: $('acc-contact').value.trim(), role: $('acc-role').value,
+  password:         $('acc-password')?.value  || '',
+  password_confirm: $('acc-password2')?.value || '',
 }), '/api/accounts', '✓ Account added', loadAccounts);
 _wireAddForm('role-mgmt-form', 'rl-submit', () => ({
   name: $('rl-name').value.trim(), description: $('rl-desc').value.trim(),
@@ -3398,4 +3516,64 @@ _injectImportButtons();
 document.addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('[data-bulk-key]');
   if (b) bulkImport(b.dataset.bulkKey);
+});
+
+// ── Manual Entry workflow (me-form) ──────────────────────────────────────────
+// Operator-driven fallback when ANPR / RFID miss a vehicle. POSTs the same
+// JSON body shape used by the Dashboard entry form so the backend code path
+// is canonical. On success we display the new ticket number inline.
+document.addEventListener('DOMContentLoaded', function () {
+  const form = document.getElementById('me-form');
+  if (!form) return;
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const btn = document.getElementById('me-submit');
+    const result = document.getElementById('me-result');
+    const plate = ($('me-plate')?.value || '').trim().toUpperCase();
+    if (!plate) { toast('✗ License plate is required', 'err'); return; }
+    const body = {
+      vehicle:  plate,
+      type:     $('me-type')?.value     || 'Car',
+      mode:     $('me-mode')?.value     || 'Manual Ticket',
+      identity: ($('me-identity')?.value || '').trim().toUpperCase(),
+      zone:     ($('me-zone')?.value    || '').trim() || 'GMR Cargo Staff Parking',
+      emp_name: ($('me-owner')?.value   || '').trim(),
+      vip:      !!$('me-vip')?.checked,
+      staff:    !!$('me-staff')?.checked,
+      // notes is metadata-only; backend ignores unknown keys.
+      notes:    ($('me-notes')?.value   || '').trim(),
+    };
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch('/api/entries', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body:    JSON.stringify(body),
+      });
+      const js = await r.json();
+      if (r.ok && js.status === 'ok') {
+        const tx = js.transaction || {};
+        const ticket = tx.id ? ('PK' + String(tx.id).padStart(8, '0')) : '—';
+        if (result) {
+          result.style.display = 'block';
+          result.innerHTML = '<b>✓ Entry recorded.</b> Ticket: <code>' + ticket
+                           + '</code> · Vehicle: <b>' + (tx.vehicle || plate) + '</b>'
+                           + ' · Mode: ' + (tx.mode || body.mode);
+        }
+        toast('✓ Entry recorded: ticket ' + ticket, 'ok');
+        form.reset();
+        // Reset the zone to the operational default after the form clears.
+        if ($('me-zone')) $('me-zone').value = 'GMR Cargo Staff Parking';
+        // Refresh dashboard widgets if they're around.
+        if (typeof refreshAll === 'function') { try { refreshAll(); } catch (_) {} }
+      } else {
+        toast('✗ ' + (js.message || 'Entry failed'), 'err');
+      }
+    } catch (err) {
+      toast('✗ Network error', 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
 });

@@ -231,6 +231,22 @@
     </style>
   </head>
   <body>
+    <!-- Session chip pinned at the very top — outside .app-shell so it stays
+         visible regardless of which view is active. Pulled in by parkvision.js
+         after /api/me resolves. -->
+    <div id="topbar-user-chip" style="position: fixed; top: 10px; right: 14px; z-index: 1100;
+                                       display: flex; align-items: center; gap: 8px;
+                                       background: rgba(255,255,255,0.92); padding: 6px 10px 6px 12px;
+                                       border: 1px solid var(--line); border-radius: 999px;
+                                       box-shadow: 0 4px 14px rgba(15,23,42,0.08);
+                                       font-size: 0.82em;">
+      <span id="topbar-username" style="font-weight: 700; color: var(--text);">…</span>
+      <button id="topbar-logout" type="button"
+              style="border: 0; background: var(--primary, #1f73d4); color: #fff;
+                     padding: 4px 10px; border-radius: 999px; cursor: pointer;
+                     font-size: 0.86em; font-weight: 600;">Logout</button>
+    </div>
+
     <!-- Mobile-only hamburger + backdrop. CSS hides these on desktop. -->
     <button id="mobile-menu-toggle" type="button" aria-label="Open menu" aria-expanded="false">
       <span></span><span></span><span></span>
@@ -265,6 +281,7 @@
 
           <button class="nav-item" data-view="devices"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21 7 3M20 21 17 3M12 3v3M12 10v3M12 17v3"/></svg></span>Lane Monitoring</button>
           <button class="nav-item" data-view="exit"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span>Manual Exit Record</button>
+          <button class="nav-item" data-view="manual-entry"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></span>Manual Entry</button>
           <button class="nav-item" data-view="orders"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2v20l2.5-1.5L10 22l2-1.5L14 22l2.5-1.5L19 22V2l-2.5 1.5L14 2l-2 1.5L10 2 7.5 3.5z"/><path d="M9 8h6M9 12h4"/></svg></span>Order Management</button>
           <!-- Member Management — expandable group -->
           <button class="nav-item nav-group" data-group="member-mgmt" aria-expanded="false">
@@ -645,6 +662,70 @@
               <p class="hint">No payment required — this is an internal parking system.</p>
             </section>
           </div>
+        </section>
+
+        <!-- ─── MANUAL ENTRY ────────────────────────────────────────────── -->
+        <!-- Operator-driven fallback when ANPR or RFID misses a vehicle.
+             POSTs the same /api/entries shape used by the Dashboard entry
+             handler so a single backend code path stays canonical. -->
+        <section id="manual-entry" class="view">
+          <section class="panel form-panel" style="max-width: 720px;">
+            <h2>Manual Entry</h2>
+            <p class="hint" style="margin-top:-4px; margin-bottom: 14px;">
+              Record a vehicle entry when ANPR or RFID fails.
+            </p>
+            <form id="me-form" autocomplete="off"
+                  style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
+              <label style="grid-column: 1 / -1;">License Plate *
+                <input type="text" id="me-plate" required
+                       placeholder="MH12AB1234" style="text-transform: uppercase;">
+              </label>
+              <label>Vehicle Type
+                <select id="me-type">
+                  <option>Car</option>
+                  <option>Bike</option>
+                  <option>Truck</option>
+                  <option>Bus</option>
+                  <option>EV</option>
+                </select>
+              </label>
+              <label>Entry Mode
+                <select id="me-mode">
+                  <option value="Manual Ticket">Manual Ticket</option>
+                  <option value="RFID/UHF">RFID/UHF</option>
+                  <option value="ANPR">ANPR</option>
+                  <option value="QR Code">QR Code</option>
+                </select>
+              </label>
+              <label>Identity Value
+                <input type="text" id="me-identity"
+                       placeholder="Ticket # or RFID tag" style="text-transform: uppercase;">
+              </label>
+              <label>Zone
+                <input type="text" id="me-zone" value="GMR Cargo Staff Parking">
+              </label>
+              <label style="grid-column: 1 / -1;">Owner Name
+                <input type="text" id="me-owner" placeholder="Optional — visitor / staff name">
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.95em; color:var(--text);">
+                <input type="checkbox" id="me-vip"> VIP vehicle
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.95em; color:var(--text);">
+                <input type="checkbox" id="me-staff"> Staff (free parking)
+              </label>
+              <label style="grid-column: 1 / -1;">Notes
+                <textarea id="me-notes" rows="2" placeholder="Reason for manual entry…"
+                          style="width:100%; resize: vertical; font-family: inherit;"></textarea>
+              </label>
+              <div style="grid-column: 1 / -1;">
+                <button type="submit" id="me-submit">+ Record Entry</button>
+              </div>
+            </form>
+            <div id="me-result" style="display:none; margin-top: 14px; padding: 10px 12px;
+                                       background: rgba(47,139,87,0.10);
+                                       border: 1px solid rgba(47,139,87,0.35);
+                                       border-radius: 8px; font-size: 0.9em;"></div>
+          </section>
         </section>
 
         <!-- ─── TARIFFS ─────────────────────────────────────────────────── -->
@@ -1499,13 +1580,15 @@
         <section id="account" class="view">
           <section class="panel" style="margin-bottom:16px;">
             <div class="panel-head"><h2>Add Account</h2></div>
-            <form id="acc-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(4,1fr); gap:12px; align-items:end;">
+            <form id="acc-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(3,1fr); gap:12px; align-items:end;">
               <label>Account Name *<input type="text" id="acc-name" required placeholder="security"></label>
               <label>Nickname<input type="text" id="acc-nick" placeholder="Sec"></label>
               <label>Contact<input type="text" id="acc-contact" placeholder="9876543210"></label>
               <label>Role
                 <select id="acc-role"><option value="">— none —</option></select>
               </label>
+              <label>Password *<input type="password" id="acc-password" required placeholder="At least 4 characters" autocomplete="new-password"></label>
+              <label>Re-enter Password *<input type="password" id="acc-password2" required placeholder="Repeat" autocomplete="new-password"></label>
               <div style="grid-column:1/-1;"><button type="submit" id="acc-submit">+ Add Account</button></div>
             </form>
           </section>
