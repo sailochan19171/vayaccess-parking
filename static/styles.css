@@ -67,7 +67,12 @@ select {
 .app-shell {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
-  min-height: 100vh;
+  /* Bound the whole shell to one viewport height so the sidebar + main can
+     scroll INDEPENDENTLY. Previously this was min-height: 100vh, which made
+     the entire page scroll as one unit — sidebar moved off-screen along
+     with the main content. */
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -77,6 +82,12 @@ select {
   padding: 22px;
   background: var(--side-bg);
   color: var(--side-text-strong);
+  /* Sidebar gets its own scroll if its nav exceeds the viewport (e.g. when
+     all sub-menus are expanded). On mobile it's position: fixed below and
+     this overflow rule still applies. */
+  height: 100vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .brand {
@@ -357,6 +368,10 @@ nav {
 main {
   min-width: 0;
   padding: 26px;
+  /* main scrolls vertically within the viewport; the sidebar stays fixed. */
+  height: 100vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .topbar {
