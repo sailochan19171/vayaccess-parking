@@ -126,7 +126,22 @@ async function applyMenuPermissions() {
 const $ = (id) => document.getElementById(id);
 
 // ── View switching (sidebar nav) ─────────────────────────────────────────────
+// Branded view-switch loader: brief logo+spinner overlay shown every time
+// the user picks a section so the transition feels intentional.
+function showViewLoader(minMs) {
+  const el = document.getElementById('view-loader');
+  if (!el) return;
+  el.hidden = false;
+  el.setAttribute('aria-hidden', 'false');
+  clearTimeout(showViewLoader._t);
+  showViewLoader._t = setTimeout(() => {
+    el.hidden = true;
+    el.setAttribute('aria-hidden', 'true');
+  }, minMs || 450);
+}
+
 function switchView(name) {
+  showViewLoader();
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === name));
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active',
                                                                         b.dataset.view === name));

@@ -2069,6 +2069,17 @@
 
     <div id="toast" role="status" aria-live="polite"></div>
 
+    <!-- Branded loader shown briefly when switching views. JS toggles [hidden]. -->
+    <div id="view-loader" class="view-loader" hidden aria-hidden="true">
+      <div class="view-loader-card">
+        <div class="view-loader-ring"></div>
+        <img class="view-loader-logo"
+             src="{{ url_for('static', filename='assets/vay-logo.jpeg') }}"
+             alt="VayAccess">
+      </div>
+      <div class="view-loader-text">Loading…</div>
+    </div>
+
     <!-- QR pass modal — opened from a row's QR button (Visitor / Member). -->
     <div id="qr-modal" class="edit-modal-backdrop" style="display:none;">
       <div class="edit-modal qr-modal">

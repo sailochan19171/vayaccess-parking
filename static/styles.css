@@ -1264,6 +1264,82 @@ td, th, .epc, code, .scan-row dd,
 }
 .qr-modal-meta b { color: var(--primary); }
 
+/* ──────────────────────────────────────────────────────────────────────
+   Branded view-switch loader. Shows briefly on every sidebar nav click
+   so the user gets feedback that the new page is loading. The VayAccess
+   logo sits inside a spinning ring and gently pulses.
+   ────────────────────────────────────────────────────────────────────── */
+.view-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(15, 35, 70, 0.18);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: vl-fade-in 0.15s ease-out;
+}
+.view-loader[hidden] { display: none; }
+
+.view-loader-card {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-loader-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 4px solid rgba(31, 115, 212, 0.18);
+  border-top-color: var(--primary, #1f73d4);
+  border-right-color: var(--primary, #1f73d4);
+  animation: vl-spin 0.9s linear infinite;
+  box-shadow: 0 8px 32px rgba(31, 115, 212, 0.25);
+}
+
+.view-loader-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  object-fit: contain;
+  background: #fff;
+  padding: 6px;
+  box-shadow: 0 6px 20px rgba(15, 35, 70, 0.18);
+  animation: vl-pulse 1.2s ease-in-out infinite;
+}
+
+.view-loader-text {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #fff;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  background: rgba(15, 35, 70, 0.62);
+  padding: 6px 16px;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(15, 35, 70, 0.25);
+}
+
+@keyframes vl-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes vl-pulse {
+  0%, 100% { transform: scale(1);    opacity: 1; }
+  50%      { transform: scale(0.92); opacity: 0.85; }
+}
+@keyframes vl-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* "Search Conditions" panel — multi-field filter bar above PDF-pattern tables
    (Order Management, Parking Records). */
 .search-conditions { margin-bottom: 14px; }
