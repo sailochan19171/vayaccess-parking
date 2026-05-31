@@ -231,21 +231,7 @@
     </style>
   </head>
   <body>
-    <!-- Session chip pinned at the very top — outside .app-shell so it stays
-         visible regardless of which view is active. Pulled in by parkvision.js
-         after /api/me resolves. -->
-    <div id="topbar-user-chip" style="position: fixed; top: 10px; right: 14px; z-index: 1100;
-                                       display: flex; align-items: center; gap: 8px;
-                                       background: rgba(255,255,255,0.92); padding: 6px 10px 6px 12px;
-                                       border: 1px solid var(--line); border-radius: 999px;
-                                       box-shadow: 0 4px 14px rgba(15,23,42,0.08);
-                                       font-size: 0.82em;">
-      <span id="topbar-username" style="font-weight: 700; color: var(--text);">…</span>
-      <button id="topbar-logout" type="button"
-              style="border: 0; background: var(--primary, #1f73d4); color: #fff;
-                     padding: 4px 10px; border-radius: 999px; cursor: pointer;
-                     font-size: 0.86em; font-weight: 600;">Logout</button>
-    </div>
+    <!-- (The user dropdown lives in the topbar itself — see .topbar-user below.) -->
 
     <!-- Mobile-only hamburger + backdrop. CSS hides these on desktop. -->
     <button id="mobile-menu-toggle" type="button" aria-label="Open menu" aria-expanded="false">
@@ -348,9 +334,19 @@
           </div>
           <div class="top-actions">
             <span id="clock"></span>
-            <div class="topbar-user">
-              <span class="topbar-avatar">R</span>
-              <span class="topbar-user-name">root ▾</span>
+            <div class="topbar-user" id="topbar-user" role="button" tabindex="0" aria-haspopup="true" aria-expanded="false">
+              <span class="topbar-avatar" id="topbar-avatar">·</span>
+              <span class="topbar-user-name" id="topbar-username">…<span class="topbar-caret">▾</span></span>
+              <div class="topbar-user-menu" id="topbar-user-menu" hidden>
+                <div class="topbar-user-info">
+                  <div class="topbar-user-info-name" id="topbar-user-info-name">—</div>
+                  <div class="topbar-user-info-role" id="topbar-user-info-role">—</div>
+                </div>
+                <button type="button" class="topbar-menu-item" id="topbar-logout">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+                  Logout
+                </button>
+              </div>
             </div>
             <button class="ghost-button" id="seed-data">Reload Demo</button>
           </div>

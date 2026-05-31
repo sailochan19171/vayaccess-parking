@@ -240,6 +240,74 @@ nav {
   font-weight: 600;
   color: var(--text);
   font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Dropdown menu on click. The .topbar-user is position: relative so the menu
+   can anchor to it. Open state toggles aria-expanded + .open class on the
+   parent + hidden attribute on the menu. */
+.topbar-user {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  transition: background 0.12s ease;
+}
+.topbar-user:hover,
+.topbar-user[aria-expanded="true"] {
+  background: rgba(31, 115, 212, 0.08);
+}
+.topbar-caret {
+  font-size: 0.7em;
+  opacity: 0.7;
+  transition: transform 0.18s ease;
+  display: inline-block;
+}
+.topbar-user[aria-expanded="true"] .topbar-caret {
+  transform: rotate(180deg);
+}
+.topbar-user-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 35, 70, 0.16);
+  min-width: 220px;
+  z-index: 1100;
+  padding: 6px;
+  overflow: hidden;
+}
+.topbar-user-menu[hidden] { display: none; }
+.topbar-user-info {
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 6px;
+}
+.topbar-user-info-name { font-weight: 700; font-size: 0.95rem; color: var(--text); }
+.topbar-user-info-role { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+.topbar-menu-item {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--danger, #b74a42);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-align: left;
+  border-radius: 6px;
+  border: 0;
+}
+.topbar-menu-item:hover {
+  background: rgba(183, 74, 66, 0.08);
+  color: var(--danger, #b74a42);
 }
 
 /* Phase-1 stub sections — clean "coming soon / lives elsewhere" panel. */

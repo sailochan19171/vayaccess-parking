@@ -36,24 +36,62 @@ window.__currentUser = null;
 })();
 
 function _hydrateTopbarUser() {
-  const el = document.getElementById('topbar-username');
-  if (el && window.__currentUser) {
-    const u = window.__currentUser;
-    el.textContent = u.name + (u.role ? ' · ' + u.role : '');
+  const u = window.__currentUser;
+  if (!u) return;
+  // Topbar chip — show username + caret; full info in the dropdown.
+  const nameEl = document.getElementById('topbar-username');
+  if (nameEl) {
+    // Preserve the caret span if it exists, otherwise inject it.
+    const caret = nameEl.querySelector('.topbar-caret');
+    nameEl.textContent = u.name || '';
+    if (caret) nameEl.appendChild(caret);
+    else nameEl.insertAdjacentHTML('beforeend', ' <span class="topbar-caret">▾</span>');
   }
+  const av = document.getElementById('topbar-avatar');
+  if (av) av.textContent = (u.name || '?').trim().charAt(0).toUpperCase();
+  const infoName = document.getElementById('topbar-user-info-name');
+  if (infoName) infoName.textContent = u.name || '—';
+  const infoRole = document.getElementById('topbar-user-info-role');
+  if (infoRole) infoRole.textContent = u.role || 'No role assigned';
 }
 
-// Logout button (in the fixed top-right chip). Posts to /api/logout then
-// hard-redirects to /login so the next page load starts in a clean session.
+// Topbar user dropdown — click to toggle, click-outside or Escape to close,
+// Logout item posts to /api/logout then hard-redirects to /login.
 document.addEventListener('DOMContentLoaded', function () {
-  const btn = document.getElementById('topbar-logout');
-  if (!btn) return;
-  btn.addEventListener('click', async function () {
-    try {
-      await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
-    } catch (_) { /* even if the call fails, bounce to login */ }
-    window.location.href = '/login';
+  const wrap = document.getElementById('topbar-user');
+  const menu = document.getElementById('topbar-user-menu');
+  const logoutBtn = document.getElementById('topbar-logout');
+  if (!wrap || !menu) return;
+
+  function setOpen(open) {
+    wrap.setAttribute('aria-expanded', String(!!open));
+    if (open) menu.removeAttribute('hidden');
+    else      menu.setAttribute('hidden', '');
+  }
+
+  // Toggle on click of the chip (but ignore clicks inside the menu itself —
+  // those are handled by the menu items' own listeners).
+  wrap.addEventListener('click', function (e) {
+    if (menu.contains(e.target)) return;
+    setOpen(wrap.getAttribute('aria-expanded') !== 'true');
   });
+  // Keyboard: Enter/Space toggles, Escape closes.
+  wrap.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(wrap.getAttribute('aria-expanded') !== 'true'); }
+    if (e.key === 'Escape') setOpen(false);
+  });
+  // Click outside closes.
+  document.addEventListener('click', function (e) {
+    if (!wrap.contains(e.target)) setOpen(false);
+  });
+  // Logout.
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async function () {
+      try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); }
+      catch (_) { /* bounce to login even if the call fails */ }
+      window.location.href = '/login';
+    });
+  }
 });
 
 // applyMenuPermissions — hide sidebar items the current role isn't allowed
