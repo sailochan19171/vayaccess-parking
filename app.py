@@ -17,7 +17,7 @@ from flask import Flask, render_template, request, jsonify, Response, session, r
 from functools import wraps
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
-                      Account, Role, DictionaryEntry, LCDScreen,
+                      Account, Role, DictionaryEntry, LCDScreen, UHFEntryEvent,
                       MenuPermission, RolePermission, migrate_schema)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
@@ -1455,13 +1455,189 @@ def check_access(det_type=None, det_cat=None):
             last_logged_time = now
 
 
+def capture_on_uhf_event(tag):
+    """UHF-triggered ANPR capture. Snapshots the current camera frame, runs
+    YOLO+OCR ONCE to identify the vehicle + plate, saves two images linked
+    to this tag (full vehicle + plate crop), writes a UHFEntryEvent row, and
+    returns the dict shape. Safe to call even if camera/ML aren't ready —
+    just logs and returns None.
+
+    This is the workflow the user described:
+       UHF tag arrives -> ANPR captures THIS frame -> save full + plate +
+       link them to this tag.
+    """
+    if CLOUD_MODE:
+        return None
+    tag_c = (tag or '').strip().upper()
+    if not tag_c:
+        return None
+
+    # Grab freshest highres frame. Wait briefly (up to ~1s) so we don't miss
+    # the moment if the camera loop is between frames when the tag arrives.
+    frame = None
+    for _ in range(20):
+        with frame_lock:
+            if latest_highres is not None:
+                frame = latest_highres.copy()
+                break
+        time.sleep(0.05)
+    if frame is None:
+        print(f"[UHF-ANPR] tag={tag_c} — no camera frame available, skip capture")
+        return None
+
+    ts       = datetime.now()
+    ts_str   = ts.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    safe_tag = ''.join(c for c in tag_c if c.isalnum())[:24] or 'TAG'
+    full_name = f"uhf_{ts_str}_{safe_tag}_full.jpg"
+    full_path = os.path.join(DETECTIONS_DIR, full_name)
+    try:
+        cv2.imwrite(full_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    except Exception as e:
+        print(f"[UHF-ANPR] failed to save full frame: {e}")
+        return None
+
+    # Run YOLO on a downscaled copy to find the primary vehicle.
+    plate_text       = None
+    plate_confidence = 0.0
+    vehicle_label    = None
+    plate_crop_name  = None
+    try:
+        h_full, w_full = frame.shape[:2]
+        small = cv2.resize(frame, (640, 360))
+        results = model(small, verbose=False, imgsz=480, conf=0.15)
+        best = None
+        for r in results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0].item())
+                conf   = float(box.conf[0].item())
+                if cls_id not in CLASS_NAMES or conf < 0.15:
+                    continue
+                x1, y1, x2, y2 = box.xyxy[0].int().tolist()
+                area = (x2 - x1) * (y2 - y1)
+                if best is None or area > best['area']:
+                    best = {'box': (x1, y1, x2, y2), 'area': area,
+                            'conf': conf, 'label': CLASS_NAMES.get(cls_id, 'Vehicle')}
+        if best:
+            vehicle_label = best['label']
+            sx, sy = w_full / 640, h_full / 360
+            x1, y1, x2, y2 = best['box']
+            hx1, hy1 = int(x1 * sx), int(y1 * sy)
+            hx2, hy2 = int(x2 * sx), int(y2 * sy)
+            pad_x = int((hx2 - hx1) * 0.15)
+            pad_y = int((hy2 - hy1) * 0.15)
+            hx1 = max(0, hx1 - pad_x); hy1 = max(0, hy1 - pad_y)
+            hx2 = min(w_full, hx2 + pad_x); hy2 = min(h_full, hy2 + pad_y)
+            vehicle_crop = frame[hy1:hy2, hx1:hx2]
+
+            if vehicle_crop.size > 0:
+                # Plate OCR — FastALPR preferred (plate-specific model),
+                # EasyOCR fallback.
+                if USE_FAST_ALPR and alpr is not None:
+                    try:
+                        ocr_results = alpr.predict(vehicle_crop)
+                        best_p = None
+                        for r in ocr_results:
+                            if r.ocr is None: continue
+                            cleaned = clean_plate_number(r.ocr.text)
+                            if not cleaned or len(cleaned) < 6: continue
+                            rc = r.ocr.confidence
+                            prob = (sum(rc) / len(rc)) if isinstance(rc, (list, tuple)) and rc else float(rc)
+                            if best_p is None or prob > best_p['prob']:
+                                bb = r.detection.bounding_box
+                                best_p = {'plate': cleaned, 'prob': prob,
+                                          'bbox': (int(bb.x1), int(bb.y1), int(bb.x2), int(bb.y2))}
+                        if best_p:
+                            plate_text       = best_p['plate']
+                            plate_confidence = best_p['prob']
+                            px1, py1, px2, py2 = best_p['bbox']
+                            px1 = max(0, px1); py1 = max(0, py1)
+                            px2 = min(vehicle_crop.shape[1], px2)
+                            py2 = min(vehicle_crop.shape[0], py2)
+                            if px2 > px1 and py2 > py1:
+                                plate_crop_name = f"uhf_{ts_str}_{safe_tag}_plate.jpg"
+                                cv2.imwrite(os.path.join(DETECTIONS_DIR, plate_crop_name),
+                                            vehicle_crop[py1:py2, px1:px2],
+                                            [cv2.IMWRITE_JPEG_QUALITY, 92])
+                    except Exception as e:
+                        print(f"[UHF-ANPR] FastALPR failed: {e}")
+                else:
+                    # EasyOCR fallback over the vehicle crop
+                    try:
+                        ocr_results = _run_easy_ocr(vehicle_crop)
+                        best_p = None
+                        for (_, text, prob) in ocr_results:
+                            cleaned = clean_plate_number(text)
+                            if cleaned and len(cleaned) >= 6 and prob > (best_p['prob'] if best_p else 0):
+                                best_p = {'plate': cleaned, 'prob': float(prob)}
+                        if best_p:
+                            plate_text = best_p['plate']
+                            plate_confidence = best_p['prob']
+                    except Exception as e:
+                        print(f"[UHF-ANPR] EasyOCR fallback failed: {e}")
+    except Exception as e:
+        print(f"[UHF-ANPR] YOLO/OCR step failed: {e}")
+
+    # Whitelist lookup -> determine GRANTED / DENIED / UNKNOWN.
+    owner_name = None
+    department = None
+    status     = "UNKNOWN"
+    try:
+        with app.app_context():
+            q = Whitelist.query.filter(db.func.upper(Whitelist.rfid_tag) == tag_c)
+            w = q.first()
+            if not w and plate_text:
+                w = Whitelist.query.filter(
+                    db.func.upper(Whitelist.number_plate) == plate_text.upper()).first()
+            if w:
+                owner_name = w.owner_name
+                department = w.department or None
+                status = "ACCESS GRANTED" if w.is_valid() else "ACCESS DENIED (EXPIRED)"
+            else:
+                status = "ACCESS DENIED (UNKNOWN TAG)"
+
+            event = UHFEntryEvent(
+                timestamp=ts, rfid_tag=tag_c, plate=plate_text,
+                vehicle_type=vehicle_label, confidence=plate_confidence,
+                full_image=full_name, plate_image=plate_crop_name,
+                owner_name=owner_name, department=department, status=status,
+            )
+            db.session.add(event)
+            db.session.commit()
+
+            print(f"[UHF-ANPR] tag={tag_c} plate={plate_text} owner={owner_name} "
+                  f"status={status} full={full_name} plate_img={plate_crop_name}")
+            return event.to_dict()
+    except Exception as e:
+        print(f"[UHF-ANPR] DB write failed: {e}")
+        return None
+
+
 def rfid_monitor():
+    last_tag      = None
+    last_tag_at   = 0.0
+    # Don't re-fire the capture for the same tag within this window — the
+    # reader can repeat reads many times per second while a vehicle sits at
+    # the gate. ~6s is plenty for one entry event.
+    UHF_DEDUP_SECONDS = 6.0
     while True:
         dashboard_state["reader_status"] = rfid.status
         tag = rfid.get_latest_tag()
         if tag:
-            dashboard_state["latest_tag"]      = tag
+            now_t = time.time()
+            tag_c = tag.strip().upper()
+            dashboard_state["latest_tag"]      = tag_c
             dashboard_state["latest_tag_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Fire the UHF-triggered capture only on a NEW tag (or after
+            # the dedup window). Runs in this thread — capture is short
+            # enough (~200-600ms) that it doesn't starve the polling loop.
+            new_tag = (tag_c != last_tag) or (now_t - last_tag_at > UHF_DEDUP_SECONDS)
+            if new_tag:
+                last_tag    = tag_c
+                last_tag_at = now_t
+                try:
+                    capture_on_uhf_event(tag_c)
+                except Exception as e:
+                    print(f"[UHF-ANPR] capture wrapper failed: {e}")
             check_access()
         time.sleep(0.5)
 
@@ -1819,6 +1995,21 @@ def resume_feed():
     return jsonify({"status": "success"})
 
 # ── Saved-plate gallery endpoints (ReolinkANPR pattern) ──────────────────────
+@app.route('/api/uhf_captures')
+@login_required
+def api_uhf_captures():
+    """Recent UHF-triggered ANPR capture events with image filenames the
+    /image/<filename> route can serve."""
+    try:
+        limit = min(int(request.args.get('limit', 200)), 1000)
+    except ValueError:
+        limit = 200
+    rows = (UHFEntryEvent.query
+            .order_by(UHFEntryEvent.timestamp.desc())
+            .limit(limit).all())
+    return jsonify([r.to_dict() for r in rows])
+
+
 @app.route('/api/recent_detections')
 def api_recent_detections():
     """Return the most recent committed plates with image filenames."""

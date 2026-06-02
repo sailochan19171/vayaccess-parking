@@ -306,6 +306,7 @@
             <button class="nav-item nav-child" data-view="role-perm"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5"/><path d="m11.5 11.5 8 8M16 16l2 2M19 13l2 2"/></svg></span>Role Permission</button>
             <button class="nav-item nav-child" data-view="dictionary"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v15a1 1 0 0 0 1 1h15M7 4h13v16H7a3 3 0 0 1 0-6h13"/></svg></span>Dictionary Managed</button>
             <button class="nav-item nav-child" data-view="audit-log"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit Log</button>
+            <button class="nav-item nav-child" data-view="uhf-captures"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="14" rx="2"/><circle cx="10" cy="12" r="3"/><path d="M19 7v10M22 9v6"/></svg></span>UHF Captures</button>
           </div>
 
           <!-- System Settings — expandable group -->
@@ -1757,6 +1758,26 @@
                 <tbody id="dc-body"><tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
               </table>
             </div>
+          </section>
+        </section>
+
+        <!-- UHF Captures — live from /api/uhf_captures (on-site only) -->
+        <section id="uhf-captures" class="view">
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>UHF-Triggered ANPR Captures</h2>
+                <p class="hint" style="margin:2px 0 0;" id="uc-meta">Every time the UHF reader picks up a tag, the camera frame + plate crop are saved here.</p>
+              </div>
+              <input type="text" id="uc-search" placeholder="Search tag / plate / owner…" style="margin:0; min-width:220px;">
+            </div>
+            <div class="table-wrap">
+              <table id="uc-table">
+                <thead><tr><th>When</th><th>Vehicle photo</th><th>Plate photo</th><th>Tag (EPC)</th><th>Plate</th><th>Owner</th><th>Status</th></tr></thead>
+                <tbody id="uc-body"><tr><td colspan="7" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+            <p class="hint" style="margin:14px 0 0;">Captures are saved on the on-site PC under <code>detections/</code> and persisted to the <code>uhf_entry_events</code> table. Click any thumbnail to view full-size.</p>
           </section>
         </section>
 

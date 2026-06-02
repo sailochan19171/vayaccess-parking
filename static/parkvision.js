@@ -161,7 +161,7 @@ function switchView(name) {
     account: 'Account Management',   lcd: 'LCD Display',
     'menu-mgmt': 'Menu Management',  role: 'Role Management',
     'role-perm': 'Role Permission',  dictionary: 'Dictionary Managed',
-    'audit-log': 'Audit Log',
+    'audit-log': 'Audit Log',         'uhf-captures': 'UHF Captures',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
 }
@@ -3484,6 +3484,56 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
   }
 });
 $('al-search')?.addEventListener('input', loadAuditLog);
+_injectTableActions();
+
+// ── UHF-triggered ANPR captures (on-site only) ──────────────────────────────
+// Each row shows two thumbnails the on-site PC saved: the full vehicle photo
+// and the plate crop. Images are served by /image/<filename> from the
+// detections/ folder. Cloud deploys will show empty rows since CLOUD_MODE
+// skips the capture pipeline.
+async function loadUhfCaptures() {
+  const tb = $('uc-body'); if (!tb) return;
+  try {
+    const raw = await (await fetch('/api/uhf_captures', { cache: 'no-store' })).json();
+    const q = ($('uc-search')?.value || '').trim().toUpperCase();
+    const rows = (Array.isArray(raw) ? raw : []).filter(e => !q ||
+      (e.rfid_tag || '').toUpperCase().includes(q) ||
+      (e.plate    || '').toUpperCase().includes(q) ||
+      (e.owner_name || '').toUpperCase().includes(q));
+    if ($('uc-meta')) $('uc-meta').textContent =
+      `${rows.length} capture(s) — newest first`;
+    const thumb = (filename, label) => filename
+      ? `<a href="/image/${encodeURIComponent(filename)}" target="_blank" rel="noopener" title="${label} — click to view full">
+           <img src="/image/${encodeURIComponent(filename)}" alt="${label}"
+                style="width:96px; height:60px; object-fit:cover; border-radius:6px; border:1px solid var(--line); display:block;">
+         </a>`
+      : '<span style="opacity:0.45;">—</span>';
+    const badge = (st) => /grant/i.test(st || '') ? `<span class="scan-status-badge granted">${_esc(st)}</span>`
+      : /den/i.test(st || '') ? `<span class="scan-status-badge denied">${_esc(st)}</span>`
+      : `<span class="scan-status-badge scanning">${_esc(st) || '—'}</span>`;
+    paginate('uc', rows, 'uc-body', e => `<tr>
+      <td>${_esc(e.timestamp)}</td>
+      <td>${thumb(e.full_image, 'Vehicle')}</td>
+      <td>${thumb(e.plate_image, 'Plate')}</td>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(e.rfid_tag)}</td>
+      <td style="font-family:monospace;">${_esc(e.plate) || '—'}</td>
+      <td>${_esc(e.owner_name) || '—'}</td>
+      <td>${badge(e.status)}</td>
+    </tr>`, 7);
+  } catch (e) { tb.innerHTML = _emptyRow(7, 'Failed to load.'); }
+}
+
+_exportCfg.uc = { loader: 'uhf-captures', name: 'uhf-captures',
+  cols: [['timestamp','When'], ['rfid_tag','Tag (EPC)'], ['plate','Plate'],
+         ['owner_name','Owner'], ['vehicle_type','Vehicle Type'], ['status','Status'],
+         ['full_image','Vehicle Photo'], ['plate_image','Plate Photo']] };
+_liveLoaders['uhf-captures'] = loadUhfCaptures;
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'uhf-captures') {
+    btn.addEventListener('click', () => setTimeout(loadUhfCaptures, 30));
+  }
+});
+$('uc-search')?.addEventListener('input', loadUhfCaptures);
 _injectTableActions();
 
 // ── Bulk CSV import (Visitors + Members) ────────────────────────────────────

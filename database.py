@@ -487,6 +487,41 @@ class RolePermission(db.Model):
         }
 
 
+class UHFEntryEvent(db.Model):
+    """One row per UHF-triggered ANPR capture. When the UHF reader sees a tag
+    on a vehicle, we snapshot the camera frame, run YOLO+OCR on it ONCE, and
+    save both the full vehicle image and the plate crop linked to that tag.
+    Decouples the capture-event from the continuous ANPR loop's stream of
+    speculative detections."""
+    __tablename__ = 'uhf_entry_events'
+    id           = db.Column(db.Integer,  primary_key=True)
+    timestamp    = db.Column(db.DateTime, default=datetime.now, index=True)
+    rfid_tag     = db.Column(db.String(100), nullable=False, index=True)
+    plate        = db.Column(db.String(50),  nullable=True)
+    vehicle_type = db.Column(db.String(50),  nullable=True)
+    confidence   = db.Column(db.Float,       nullable=True)
+    full_image   = db.Column(db.String(200), nullable=True)   # filename under detections/
+    plate_image  = db.Column(db.String(200), nullable=True)
+    owner_name   = db.Column(db.String(100), nullable=True)   # from whitelist lookup
+    department   = db.Column(db.String(100), nullable=True)
+    status       = db.Column(db.String(80),  nullable=True)   # GRANTED / DENIED / EXPIRED / UNKNOWN
+
+    def to_dict(self):
+        return {
+            "id":           self.id,
+            "timestamp":    self.timestamp.strftime("%Y-%m-%d %H:%M:%S") if self.timestamp else "",
+            "rfid_tag":     self.rfid_tag,
+            "plate":        self.plate or "",
+            "vehicle_type": self.vehicle_type or "",
+            "confidence":   round(self.confidence or 0, 3),
+            "full_image":   self.full_image or "",
+            "plate_image":  self.plate_image or "",
+            "owner_name":   self.owner_name or "",
+            "department":   self.department or "",
+            "status":       self.status or "",
+        }
+
+
 class LCDScreen(db.Model):
     __tablename__ = 'lcd_screens'
     id          = db.Column(db.Integer, primary_key=True)
