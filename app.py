@@ -18,7 +18,9 @@ from functools import wraps
 from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Setting, AuditEvent, Blacklist, Visitor, Region, Yard,
                       Account, Role, DictionaryEntry, LCDScreen, UHFEntryEvent,
-                      MenuPermission, RolePermission, migrate_schema)
+                      MenuPermission, RolePermission, migrate_schema,
+                      DriverUser, DriverSession, DriverReservation,
+                      DriverNotification, ImageBlob)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -26,6 +28,8 @@ import time
 import queue
 import json
 import re
+import socket
+import printer_service as printer   # VAY Printer Service (ESC/POS, LAN/USB)
 
 from datetime import datetime, timedelta
 
@@ -118,7 +122,18 @@ if CLOUD_MODE:
     USE_FAST_ALPR = False
     print("[CLOUD] CLOUD_MODE active — skipping hardware + ML init")
 else:
-    rfid   = RFIDReader(ip='192.168.0.200', port=200)
+    # RFID reader IP is per-site. Read from .env so each on-site laptop can
+    # point at whatever address the reader ended up on for that gate. Defaults
+    # to the historical hardcoded value when the env var is missing so
+    # existing installs keep working without an .env update.
+    _rfid_host = (os.environ.get('RFID_READER_IP') or '192.168.0.200').strip()
+    try:
+        _rfid_port = int(os.environ.get('RFID_READER_PORT', '200'))
+    except ValueError:
+        _rfid_port = 200
+    print(f"[RFID] Configured target: {_rfid_host}:{_rfid_port} "
+          f"(from .env RFID_READER_IP)")
+    rfid   = RFIDReader(ip=_rfid_host, port=_rfid_port)
     # Desktop SRK-F206 reader for the /activate enrollment workflow. Auto-detects
     # a USB-serial COM port; UI also exposes /api/desktop_reader/* to configure it.
     desktop_rfid = DesktopReader(port=None, baudrate=115200)
@@ -171,6 +186,464 @@ latest_jpeg      = None          # Pre-encoded JPEG bytes — produced once per 
 latest_highres   = None          # Raw frame for high-quality OCR crop
 frame_lock       = threading.Lock()
 frame_id         = 0
+
+# JPEG quality used when camera_loop encodes each annotated frame. Tunable
+# via CLOUD_STREAM_JPEG_Q env var. Applies to both /video_feed and the cloud
+# push (they share latest_jpeg — no double-encode).
+#   80 (default) — ~2.4 Mbps at 10 fps, sharp
+#   65           — ~1.6 Mbps at 10 fps, still crisp
+#   50           — ~1.2 Mbps at 10 fps, plates readable
+#   40           — ~0.8 Mbps at 10 fps, plates soft but legible
+#   30           — ~0.56 Mbps at 10 fps, blocky (not recommended)
+try:
+    _STREAM_JPEG_Q = int(os.environ.get('CLOUD_STREAM_JPEG_Q', '80'))
+except ValueError:
+    _STREAM_JPEG_Q = 80
+_STREAM_JPEG_Q = max(20, min(95, _STREAM_JPEG_Q))
+
+# Debug snapshots off by default — dumps 2 JPEGs to debug_snapshots/ every
+# 10s while the pipeline runs. Only useful when debugging camera aim / OCR.
+# Set DEBUG_SNAPSHOTS=1 in .env to re-enable temporarily.
+_DEBUG_SNAPSHOTS = (os.environ.get('DEBUG_SNAPSHOTS', '0').strip() == '1')
+
+# ─── Watermark config ────────────────────────────────────────────────────────
+# Every UHF capture image + live cloud stream gets a semi-transparent overlay
+# in the bottom-left showing timestamp, gate name, and GPS coordinates. All
+# values are per-site — set in .env:
+#   GATE_LOCATION_NAME  — e.g. "Main Gate", "Basement A", "Warehouse Entry"
+#   GATE_LATITUDE       — decimal degrees, e.g. 17.446110
+#   GATE_LONGITUDE      — decimal degrees, e.g. 78.348570
+# If GPS is missing we try one IP-based geolocation lookup at startup so
+# something reasonable still shows even for admins who never opened .env.
+_WATERMARK_ENABLED = (os.environ.get('WATERMARK', '1').strip() != '0')
+_GATE_LOCATION_NAME = (os.environ.get('GATE_LOCATION_NAME') or 'VayAccess Gate').strip()
+_GATE_ADDRESS = (os.environ.get('GATE_ADDRESS_LINE') or '').strip()
+
+def _parse_float(val):
+    try:
+        return float(val) if val is not None and str(val).strip() else None
+    except (ValueError, TypeError):
+        return None
+
+_GATE_LAT = _parse_float(os.environ.get('GATE_LATITUDE'))
+_GATE_LNG = _parse_float(os.environ.get('GATE_LONGITUDE'))
+
+# Auto-detection state. Live-refreshed by _watermark_geolocate_worker() so the
+# watermark stays accurate if this laptop is redeployed to a different site.
+_watermark_lock = threading.Lock()
+
+def _try_geolocate_once():
+    """Query a chain of free IP-geolocation providers. Returns
+    (lat, lng, city, region) on the first success, else None. Each provider
+    normalises to the same tuple. No API keys, no auth."""
+    import urllib.request as _u
+    _providers = [
+        ("ipapi.co",     "https://ipapi.co/json/",           'latitude', 'longitude', 'city', 'region'),
+        ("ip-api.com",   "http://ip-api.com/json/",           'lat',      'lon',       'city', 'regionName'),
+        ("ipwho.is",     "https://ipwho.is/",                 'latitude', 'longitude', 'city', 'region'),
+        ("freeipapi",    "https://freeipapi.com/api/json/",   'latitude', 'longitude', 'cityName', 'regionName'),
+    ]
+    for _name, _url, _kLat, _kLng, _kCity, _kRegion in _providers:
+        try:
+            _req = _u.Request(_url, headers={'User-Agent': 'VayAccess-Parking-Agent/1.0'})
+            with _u.urlopen(_req, timeout=4) as _resp:
+                _geo = json.loads(_resp.read().decode('utf-8'))
+            _lat = _parse_float(_geo.get(_kLat))
+            _lng = _parse_float(_geo.get(_kLng))
+            if _lat is not None and _lng is not None:
+                _city = (_geo.get(_kCity) or '').strip()
+                _region = (_geo.get(_kRegion) or '').strip()
+                print(f"[WATERMARK] Geolocated via {_name}: lat={_lat}, lng={_lng}, "
+                      f"city='{_city}', region='{_region}'")
+                return (_lat, _lng, _city, _region)
+        except Exception as _e:
+            print(f"[WATERMARK] {_name} failed ({_e}); trying next provider...")
+    return None
+
+def _try_reverse_geocode(lat, lng):
+    """Query OpenStreetMap Nominatim for a human-readable street address.
+    Returns a compact 'road, suburb, city, state' string, or None on failure."""
+    import urllib.request as _u
+    try:
+        _req = _u.Request(
+            f"https://nominatim.openstreetmap.org/reverse"
+            f"?lat={lat}&lon={lng}&format=json&zoom=17&addressdetails=1",
+            headers={'User-Agent': 'VayAccess-Parking-Agent/1.0'})
+        with _u.urlopen(_req, timeout=5) as _resp:
+            _nom = json.loads(_resp.read().decode('utf-8'))
+        _addr = _nom.get('address') or {}
+        _parts = [
+            _addr.get('road') or _addr.get('pedestrian') or _addr.get('neighbourhood'),
+            _addr.get('suburb') or _addr.get('village') or _addr.get('town'),
+            _addr.get('city') or _addr.get('city_district') or _addr.get('county'),
+            _addr.get('state'),
+        ]
+        _seen = set()
+        _uniq = []
+        for _p in _parts:
+            if _p and _p not in _seen:
+                _uniq.append(_p)
+                _seen.add(_p)
+        _addrline = ', '.join(_uniq)[:80]
+        if not _addrline:
+            _addrline = (_nom.get('display_name') or '')[:80]
+        print(f"[WATERMARK] Reverse-geocoded address: '{_addrline}'")
+        return _addrline
+    except Exception as _e:
+        print(f"[WATERMARK] Reverse-geocode failed ({_e}).")
+        return None
+
+def _watermark_geolocate_worker():
+    """Background thread: tries every provider until one works, then refreshes
+    every 30 min so the watermark stays right if the laptop is redeployed.
+    Only touches lat/lng/address that weren't hardcoded in .env."""
+    global _GATE_LAT, _GATE_LNG, _GATE_LOCATION_NAME, _GATE_ADDRESS
+    _envLatSet = _parse_float(os.environ.get('GATE_LATITUDE')) is not None
+    _envLngSet = _parse_float(os.environ.get('GATE_LONGITUDE')) is not None
+    _envAddrSet = bool((os.environ.get('GATE_ADDRESS_LINE') or '').strip())
+    _envNameSet = bool((os.environ.get('GATE_LOCATION_NAME') or '').strip() and
+                       (os.environ.get('GATE_LOCATION_NAME') or '').strip() != 'VayAccess Gate')
+    # First attempt: retry with short backoff until success.
+    _attempt = 0
+    while True:
+        _result = _try_geolocate_once()
+        if _result is not None:
+            _lat, _lng, _city, _region = _result
+            with _watermark_lock:
+                if not _envLatSet: _GATE_LAT = _lat
+                if not _envLngSet: _GATE_LNG = _lng
+                if not _envNameSet and _city:
+                    _GATE_LOCATION_NAME = f"{_city}, {_region}".rstrip(", ")
+            if not _envAddrSet:
+                _addrline = _try_reverse_geocode(_lat, _lng)
+                if _addrline:
+                    with _watermark_lock:
+                        _GATE_ADDRESS = _addrline
+            break
+        _attempt += 1
+        _sleep = min(300, 15 * _attempt)   # 15s, 30s, 45s, ... capped at 5 min
+        print(f"[WATERMARK] All providers failed. Retrying in {_sleep}s (attempt {_attempt})")
+        time.sleep(_sleep)
+    # Refresh loop: re-geocode every 30 min so a laptop that moves sites
+    # picks up its new location automatically.
+    while True:
+        time.sleep(1800)
+        _result = _try_geolocate_once()
+        if _result is not None:
+            _lat, _lng, _city, _region = _result
+            with _watermark_lock:
+                if not _envLatSet: _GATE_LAT = _lat
+                if not _envLngSet: _GATE_LNG = _lng
+                if not _envNameSet and _city:
+                    _GATE_LOCATION_NAME = f"{_city}, {_region}".rstrip(", ")
+            if not _envAddrSet:
+                _addrline = _try_reverse_geocode(_lat, _lng)
+                if _addrline:
+                    with _watermark_lock:
+                        _GATE_ADDRESS = _addrline
+
+# Live-updated address string that _draw_watermark reads on every frame.
+# Fed by the background refresher below, which reads from the settings
+# table every 15 s. Setting is written by POST /api/settings/gate_address
+# so operators can update the watermark from the webportal WITHOUT
+# touching .env and WITHOUT restarting the agent.
+_GATE_ADDRESS_LIVE = _GATE_ADDRESS   # seed with the .env value
+
+def _gate_address_refresher():
+    """Background thread: pulls the current gate_address_line from the
+    settings table every 15 s so UI edits show up on the next capture.
+    Falls back to the .env value if no DB row exists."""
+    global _GATE_ADDRESS_LIVE
+    while True:
+        try:
+            with app.app_context():
+                _val = Setting.get('gate_address_line', None)
+            if _val is not None:
+                _GATE_ADDRESS_LIVE = (_val or '').strip()
+        except Exception:
+            pass
+        time.sleep(15)
+
+# Auto-geolocation is INTENTIONALLY not started. IP-based geolocation is
+# city-accurate at best; every installation is expected to type its own
+# exact address into the webportal's Watermark Address input (persisted
+# via the settings table). GATE_ADDRESS_LINE in .env is still respected
+# as the initial value.
+if _WATERMARK_ENABLED and _GATE_ADDRESS:
+    print(f"[WATERMARK] Seeded with .env address: '{_GATE_ADDRESS}' "
+          "(UI edits via /api/settings/gate_address override this)")
+elif _WATERMARK_ENABLED:
+    print("[WATERMARK] No GATE_ADDRESS_LINE in .env yet -- watermark will show "
+          "timestamp only until an operator types an address in the webportal.")
+
+
+# ── DLNA / UPnP AVTransport TV push ─────────────────────────────────────────
+# Every UHF capture is pushed to any DLNA MediaRenderer TV on the LAN (Sony,
+# LG, TCL, Samsung, Xiaomi and most Android TVs advertise this by default).
+# Auto-discovered via SSDP at startup; also honours TV_AVTRANSPORT_URL in
+# .env for manual override (useful if SSDP is blocked). Set TV_DISPLAY_ENABLED=0
+# to disable entirely. Runs off-thread so a slow TV never blocks the gate.
+_TV_ENABLED = (os.environ.get('TV_DISPLAY_ENABLED', '1').strip() != '0')
+_TV_MANUAL_URL = (os.environ.get('TV_AVTRANSPORT_URL') or '').strip()
+_TV_TARGETS = []      # list of {control_url, image_base, friendly_name, tv_ip}
+_TV_LOCK = threading.Lock()
+
+def _source_ip_toward(target_ip):
+    """Which of THIS laptop's IPs would the kernel use to send a packet to
+    target_ip? Used to build the /image/<name> URL the TV can fetch back."""
+    try:
+        _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _s.settimeout(1.0)
+        _s.connect((target_ip, 1))
+        _ip = _s.getsockname()[0]
+        _s.close()
+        return _ip
+    except Exception:
+        return None
+
+def _parse_tv_description(desc_url, tv_ip):
+    """Fetch a TV's UPnP description.xml and, if it exposes AVTransport,
+    add it to _TV_TARGETS. Called once per unique SSDP LOCATION header."""
+    import urllib.request, xml.etree.ElementTree as _ET
+    from urllib.parse import urljoin, urlparse
+    try:
+        with urllib.request.urlopen(desc_url, timeout=4) as _r:
+            _xml = _r.read()
+        _root = _ET.fromstring(_xml)
+        _friendly = ''
+        _ctrl_rel = None
+        for _elem in _root.iter():
+            _tag = _elem.tag.split('}')[-1]
+            if _tag == 'friendlyName' and not _friendly:
+                _friendly = (_elem.text or '').strip()
+            if _tag == 'service':
+                _st = None; _cu = None
+                for _child in _elem:
+                    _ct = _child.tag.split('}')[-1]
+                    if _ct == 'serviceType': _st = _child.text
+                    elif _ct == 'controlURL': _cu = _child.text
+                if _st and 'AVTransport' in _st and _cu:
+                    _ctrl_rel = _cu
+        if not _ctrl_rel:
+            return
+        # Resolve controlURL against the description URL's base.
+        if _ctrl_rel.startswith('http'):
+            _ctrl_url = _ctrl_rel
+        elif _ctrl_rel.startswith('/'):
+            _p = urlparse(desc_url)
+            _ctrl_url = f"{_p.scheme}://{_p.netloc}{_ctrl_rel}"
+        else:
+            _ctrl_url = urljoin(desc_url, _ctrl_rel)
+        _src_ip = _source_ip_toward(tv_ip)
+        if not _src_ip:
+            print(f"[TV-DISCOVERY] cannot determine local source IP for TV {tv_ip}")
+            return
+        # Use the same port the Flask app listens on. Falls back to 5002.
+        _port = int(os.environ.get('FLASK_PORT', '5002') or 5002)
+        _target = {
+            'control_url':   _ctrl_url,
+            'image_base':    f'http://{_src_ip}:{_port}',
+            'friendly_name': _friendly or tv_ip,
+            'tv_ip':         tv_ip,
+        }
+        with _TV_LOCK:
+            for _t in _TV_TARGETS:
+                if _t['control_url'] == _ctrl_url:
+                    return   # already added
+            _TV_TARGETS.append(_target)
+        print(f"[TV-DISCOVERY] Found MediaRenderer '{_friendly}' at {tv_ip} "
+              f"-- will push captures to {_ctrl_url}")
+    except Exception as _e:
+        pass   # silent -- one bad device shouldn't stop the scan
+
+def _discover_dlna_tvs():
+    """One-shot SSDP M-SEARCH for AVTransport MediaRenderers. Runs in a
+    background thread at startup; also re-runs every 5 min so a TV that was
+    off at boot gets picked up when it comes online."""
+    import socket as _sk
+    while True:
+        try:
+            _sock = _sk.socket(_sk.AF_INET, _sk.SOCK_DGRAM)
+            _sock.setsockopt(_sk.IPPROTO_IP, _sk.IP_MULTICAST_TTL, 2)
+            _sock.settimeout(4)
+            _msg = ('M-SEARCH * HTTP/1.1\r\n'
+                    'HOST: 239.255.255.250:1900\r\n'
+                    'MAN: "ssdp:discover"\r\n'
+                    'MX: 3\r\n'
+                    'ST: urn:schemas-upnp-org:service:AVTransport:1\r\n\r\n')
+            _sock.sendto(_msg.encode('ascii'), ('239.255.255.250', 1900))
+            _seen = set()
+            _deadline = time.time() + 4
+            while time.time() < _deadline:
+                try:
+                    _data, _addr = _sock.recvfrom(4096)
+                    _text = _data.decode('ascii', errors='replace')
+                    _loc = None
+                    for _line in _text.split('\r\n'):
+                        if _line.lower().startswith('location:'):
+                            _loc = _line.split(':', 1)[1].strip()
+                            break
+                    if _loc and _loc not in _seen:
+                        _seen.add(_loc)
+                        _parse_tv_description(_loc, _addr[0])
+                except _sk.timeout:
+                    break
+                except Exception:
+                    continue
+            _sock.close()
+        except Exception as _e:
+            print(f"[TV-DISCOVERY] scan error: {_e}")
+        # Re-scan every 5 minutes so a TV powered on after boot gets picked up.
+        time.sleep(300)
+
+def _tv_push_sync(image_filename):
+    """Blocking version -- send SetAVTransportURI + Play SOAP to every known TV."""
+    import urllib.request
+    with _TV_LOCK:
+        _targets = list(_TV_TARGETS)
+    for _tv in _targets:
+        _img_url = f"{_tv['image_base']}/image/{image_filename}"
+        _set_body = (
+            '<?xml version="1.0"?>'
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+            '<s:Body>'
+            '<u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+            '<InstanceID>0</InstanceID>'
+            f'<CurrentURI>{_img_url}</CurrentURI>'
+            '<CurrentURIMetaData></CurrentURIMetaData>'
+            '</u:SetAVTransportURI>'
+            '</s:Body></s:Envelope>')
+        _play_body = (
+            '<?xml version="1.0"?>'
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+            '<s:Body>'
+            '<u:Play xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+            '<InstanceID>0</InstanceID><Speed>1</Speed>'
+            '</u:Play>'
+            '</s:Body></s:Envelope>')
+        try:
+            for _action, _body in (('SetAVTransportURI', _set_body), ('Play', _play_body)):
+                _req = urllib.request.Request(
+                    _tv['control_url'], data=_body.encode('utf-8'), method='POST',
+                    headers={'Content-Type': 'text/xml; charset="utf-8"',
+                             'SOAPAction': f'"urn:schemas-upnp-org:service:AVTransport:1#{_action}"'})
+                with urllib.request.urlopen(_req, timeout=5) as _r:
+                    _r.read()
+            print(f"[TV-PUSH] {_tv['friendly_name']}: {image_filename}")
+        except Exception as _e:
+            print(f"[TV-PUSH] {_tv['friendly_name']} failed: {_e}")
+
+def push_to_tv(image_filename):
+    """Fire-and-forget: push the given image filename to every discovered TV.
+    Never blocks the caller. No-op if TV push is disabled or no TVs found."""
+    if not _TV_ENABLED or not image_filename:
+        return
+    with _TV_LOCK:
+        _has_targets = bool(_TV_TARGETS)
+    if not _has_targets:
+        return
+    threading.Thread(target=_tv_push_sync, args=(image_filename,),
+                     daemon=True, name='tv-push').start()
+
+if _TV_ENABLED:
+    # Seed with manual URL if the operator set one in .env.
+    if _TV_MANUAL_URL:
+        _src = _source_ip_toward('8.8.8.8') or '127.0.0.1'   # coarse fallback
+        _port = int(os.environ.get('FLASK_PORT', '5002') or 5002)
+        _TV_TARGETS.append({
+            'control_url':   _TV_MANUAL_URL,
+            'image_base':    f'http://{_src}:{_port}',
+            'friendly_name': 'TV (manual)',
+            'tv_ip':         '',
+        })
+        print(f"[TV-DISCOVERY] Manual TV_AVTRANSPORT_URL loaded: {_TV_MANUAL_URL}")
+    threading.Thread(target=_discover_dlna_tvs, daemon=True, name='tv-discovery').start()
+else:
+    print("[TV-DISPLAY] TV_DISPLAY_ENABLED=0 in .env -- automatic TV push disabled.")
+
+
+def _draw_watermark(frame):
+    """Overlay a semi-transparent info panel with timestamp + location + GPS
+    onto `frame` (BGR ndarray) IN PLACE. Safe on any frame size — panel
+    sits in the bottom-left with proportional padding.
+
+    Returns the same frame reference for chaining. No-op if the watermark
+    is disabled via WATERMARK=0 in .env or the frame is invalid."""
+    if not _WATERMARK_ENABLED:
+        return frame
+    if frame is None or getattr(frame, 'size', 0) == 0:
+        return frame
+
+    h, w = frame.shape[:2]
+
+    now = datetime.now()
+    lines = [now.strftime("Date: %d/%m/%Y | Time: %H:%M:%S")]
+    # Address is read from the live cache, which is fed by a background
+    # thread that refreshes from the settings table every 15s. That way
+    # UI edits (POST /api/settings/gate_address) take effect on the very
+    # next capture without any restart.
+    _addr = _GATE_ADDRESS_LIVE or _GATE_ADDRESS
+    if _addr:
+        lines.append(_addr)
+
+    # Scale text size with frame width so 640x360 and 1920x1080 both look right.
+    font        = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale  = max(0.4, min(0.8, w / 1400.0))
+    thickness   = 1 if w < 1000 else 2
+    line_height = int(24 * font_scale) + 6
+    pad         = int(10 * font_scale) + 4
+
+    # Measure widest line to size the background rect.
+    max_tw = 0
+    for line in lines:
+        (tw, _th), _ = cv2.getTextSize(line, font, font_scale, thickness)
+        if tw > max_tw:
+            max_tw = tw
+    box_w = max_tw + pad * 2
+    box_h = line_height * len(lines) + pad * 2 - 4
+
+    # Bottom-left corner with a small margin.
+    margin = int(8 * font_scale) + 4
+    x1 = margin
+    y1 = h - box_h - margin
+    x2 = x1 + box_w
+    y2 = h - margin
+    x1 = max(0, x1); y1 = max(0, y1)
+    x2 = min(w, x2); y2 = min(h, y2)
+
+    # Semi-transparent black background.
+    try:
+        sub = frame[y1:y2, x1:x2]
+        overlay = sub.copy()
+        overlay[:] = (0, 0, 0)
+        cv2.addWeighted(overlay, 0.55, sub, 0.45, 0, sub)
+
+        # Text (white with a thin darker outline for readability on
+        # bright backgrounds).
+        for i, line in enumerate(lines):
+            y = y1 + pad + line_height * (i + 1) - 6
+            # Outline pass
+            cv2.putText(frame, line, (x1 + pad, y),
+                        font, font_scale, (0, 0, 0),
+                        thickness + 2, cv2.LINE_AA)
+            # Foreground pass
+            cv2.putText(frame, line, (x1 + pad, y),
+                        font, font_scale, (255, 255, 255),
+                        thickness, cv2.LINE_AA)
+    except Exception:
+        # Never let a watermarking bug kill a capture / stream.
+        pass
+    return frame
+
+# Cloud-mode live video state — populated by /api/cloud_push/frame, served by
+# /video_feed when CLOUD_MODE=1. The on-site PC runs a frame pusher that POSTs
+# a JPEG every ~500 ms; the cloud holds only the latest frame in RAM so memory
+# stays bounded regardless of how long the agent has been running.
+cloud_frame_lock      = threading.Lock()
+latest_cloud_frame    = None     # bytes of the most recent JPEG pushed
+latest_cloud_frame_at = None     # datetime — when the frame was received
 
 # Detections written by worker_thread, read by camera_loop
 detections_lock  = threading.Lock()
@@ -234,12 +707,17 @@ def save_plate_artifacts(plate_text, crop_img, bbox_in_crop, confidence):
     full_path = os.path.join(DETECTIONS_DIR, full_name)
     crop_path = os.path.join(DETECTIONS_DIR, crop_name)
     try:
-        cv2.imwrite(full_path, crop_img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        # Watermark BOTH the full crop + the plate close-up so evidence chain
+        # is intact whichever image gets forwarded / downloaded.
+        cv2.imwrite(full_path, _draw_watermark(crop_img.copy()),
+                    [cv2.IMWRITE_JPEG_QUALITY, 85])
         x1, y1, x2, y2 = bbox_in_crop
         x1 = max(0, x1); y1 = max(0, y1)
         x2 = min(crop_img.shape[1], x2); y2 = min(crop_img.shape[0], y2)
         if x2 > x1 and y2 > y1:
-            cv2.imwrite(crop_path, crop_img[y1:y2, x1:x2], [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cv2.imwrite(crop_path,
+                        _draw_watermark(crop_img[y1:y2, x1:x2].copy()),
+                        [cv2.IMWRITE_JPEG_QUALITY, 90])
         rec = {
             "plate":      plate_text,
             "confidence": round(float(confidence), 3),
@@ -359,15 +837,40 @@ CLASS_NAMES = {2: "Car", 3: "Motorcycle", 5: "Bus", 7: "Truck"}
 # ── Camera Config system and Connection Helper ──────────────────────────────
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "camera_config.json")
 
+def _default_camera_source():
+    """Build the default RTSP URL from .env values. Every field has a fallback
+    to the historical XM-3MP defaults so existing installs keep working.
+      CAMERA_IP    -- IP address on this site's LAN (per-site)
+      CAMERA_PORT  -- 8557 for XM sub-stream, 554 for most Reolink main stream
+      CAMERA_USER  -- 'admin' by default
+      CAMERA_PASS  -- empty by default (XM ships open by default)
+      CAMERA_PATH  -- '/stream2' for XM sub, '/h264Preview_01_sub' for Reolink
+    """
+    ip   = (os.environ.get('CAMERA_IP')   or '192.168.1.12').strip()
+    port = (os.environ.get('CAMERA_PORT') or '8557').strip()
+    user = (os.environ.get('CAMERA_USER') or 'admin').strip()
+    pwd  = (os.environ.get('CAMERA_PASS') or '').strip()
+    path = (os.environ.get('CAMERA_PATH') or '/stream2').strip()
+    if not path.startswith('/'):
+        path = '/' + path
+    creds = user + (':' + pwd if pwd else '') + '@'
+    return f"rtsp://{creds}{ip}:{port}{path}"
+
+
 def load_camera_config():
+    """Camera URL priority:
+       1. camera_config.json  (runtime override from the UI)
+       2. .env-driven default (CAMERA_IP + CAMERA_PORT + CAMERA_USER + ...)
+       3. XM-3MP historical default (192.168.1.12:8557/stream2)"""
+    env_default = _default_camera_source()
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r") as f:
                 config = json.load(f)
-                return config.get("camera_source", "rtsp://admin:@192.168.1.12:8557/stream2")
+                return config.get("camera_source", env_default)
         except Exception as e:
             print(f"[CONFIG] Error reading config: {e}")
-    return "rtsp://admin:@192.168.1.12:8557/stream2"
+    return env_default
 
 def save_camera_config(source):
     try:
@@ -882,8 +1385,12 @@ def worker_thread():
         # Debug snapshot: every 10s, dump exactly what's being fed to YOLO + a
         # raw-frame copy. Lets us SEE whether the camera frame actually contains a
         # vehicle, independent of whether YOLO scores it.
+        #
+        # Off by default — set DEBUG_SNAPSHOTS=1 in .env to enable. Was
+        # generating ~360 files/hour, wasting disk + a small amount of CPU on
+        # the imwrite. Only worth turning on when actively debugging aim/OCR.
         now = time.time()
-        if now - last_debug_snapshot_t > 10.0:
+        if _DEBUG_SNAPSHOTS and now - last_debug_snapshot_t > 10.0:
             last_debug_snapshot_t = now
             try:
                 dbg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1132,9 +1639,22 @@ def camera_loop():
             # Add a bottom progress overlay bar
             cv2.rectangle(out_frame, (0, DISPLAY_H - 6), (DISPLAY_W, DISPLAY_H), (0, 165, 255), -1)
 
+        # Watermark the live-stream frame with timestamp + gate + GPS BEFORE
+        # JPEG encoding, so cloud viewers and the local MJPEG dashboard both
+        # see the evidence overlay identical to what UHF captures record.
+        # Operates in place on out_frame (not on latest_highres, which stays
+        # unmodified for OCR crops).
+        _draw_watermark(out_frame)
+
         # Encode JPEG once here so the streaming endpoint just copies bytes.
         # Previously every browser request re-encoded the frame, contending with YOLO for CPU.
-        ok_enc, buf = cv2.imencode('.jpg', out_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        # Quality tunable via .env — 80 default, 50 for ~1.2 Mbps at 10 fps,
+        # 40 for ~800 kbps. Below 40 plate numerals start to get blocky.
+        # Read once here (module-level) so the loop doesn't hit os.environ on
+        # every frame; changes require a Flask restart, which is the same as
+        # every other .env-driven knob in the codebase.
+        ok_enc, buf = cv2.imencode('.jpg', out_frame,
+                                   [cv2.IMWRITE_JPEG_QUALITY, _STREAM_JPEG_Q])
         jpeg_bytes = buf.tobytes() if ok_enc else None
 
         with frame_lock:
@@ -1456,15 +1976,17 @@ def check_access(det_type=None, det_cat=None):
 
 
 def capture_on_uhf_event(tag):
-    """UHF-triggered ANPR capture. Snapshots the current camera frame, runs
-    YOLO+OCR ONCE to identify the vehicle + plate, saves two images linked
-    to this tag (full vehicle + plate crop), writes a UHFEntryEvent row, and
-    returns the dict shape. Safe to call even if camera/ML aren't ready —
-    just logs and returns None.
+    """UHF-triggered ANPR capture. Snapshots the current camera frame, then
+    hands the expensive YOLO+OCR+imwrite+DB+cloud-push work to a background
+    thread and returns to rfid_monitor immediately (~50 ms instead of the
+    previous 2-5 s blocked).
 
     This is the workflow the user described:
        UHF tag arrives -> ANPR captures THIS frame -> save full + plate +
        link them to this tag.
+
+    Return None always — the caller (rfid_monitor) ignores the value; the
+    async work commits directly to the DB and pushes to the cloud.
     """
     if CLOUD_MODE:
         return None
@@ -1472,8 +1994,10 @@ def capture_on_uhf_event(tag):
     if not tag_c:
         return None
 
-    # Grab freshest highres frame. Wait briefly (up to ~1s) so we don't miss
-    # the moment if the camera loop is between frames when the tag arrives.
+    # Grab freshest highres frame — the ONE synchronous step. Everything
+    # else (YOLO, OCR, JPEG writes, DB commit, cloud push) runs off-thread.
+    # Wait briefly (up to ~1 s) so we don't miss the moment if camera_loop
+    # is between frames when the tag arrives.
     frame = None
     for _ in range(20):
         with frame_lock:
@@ -1485,16 +2009,44 @@ def capture_on_uhf_event(tag):
         print(f"[UHF-ANPR] tag={tag_c} — no camera frame available, skip capture")
         return None
 
+    # Hand off to background thread. rfid_monitor returns to polling the
+    # SRK reader for the next tag without waiting for YOLO+OCR.
+    def _do_capture_async(_tag, _frame):
+        try:
+            _capture_worker(_tag, _frame)
+        except Exception as e:
+            print(f"[UHF-ANPR] async capture failed for tag={_tag}: {e}")
+    threading.Thread(target=_do_capture_async, args=(tag_c, frame),
+                     daemon=True).start()
+    return None
+
+
+def _capture_worker(tag_c, frame):
+    """The heavy path — runs off-thread from capture_on_uhf_event so the
+    rfid_monitor loop stays responsive. Body unchanged from the original
+    synchronous capture; just moved into its own function."""
+
     ts       = datetime.now()
     ts_str   = ts.strftime("%Y%m%d_%H%M%S_%f")[:-3]
     safe_tag = ''.join(c for c in tag_c if c.isalnum())[:24] or 'TAG'
     full_name = f"uhf_{ts_str}_{safe_tag}_full.jpg"
     full_path = os.path.join(DETECTIONS_DIR, full_name)
     try:
-        cv2.imwrite(full_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        # Watermark BEFORE writing so the saved file has evidence data baked
+        # into the pixels (timestamp + gate location + GPS). Operates on a
+        # copy so we don't disturb the buffer passed in from camera_loop.
+        _wm_frame = _draw_watermark(frame.copy())
+        cv2.imwrite(full_path, _wm_frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
     except Exception as e:
         print(f"[UHF-ANPR] failed to save full frame: {e}")
         return None
+
+    # Push to TV *now* -- the JPEG is on disk and reachable via /image/. YOLO
+    # and OCR below don't mutate the file; they just populate DB fields. Doing
+    # this before the ML pipeline shaves 1-2 s off the TV display latency on
+    # CPU-only hardware. push_to_tv is already fire-and-forget so the ML work
+    # continues immediately in this thread.
+    push_to_tv(full_name)
 
     # Run YOLO on a downscaled copy to find the primary vehicle.
     plate_text       = None
@@ -1555,8 +2107,10 @@ def capture_on_uhf_event(tag):
                             py2 = min(vehicle_crop.shape[0], py2)
                             if px2 > px1 and py2 > py1:
                                 plate_crop_name = f"uhf_{ts_str}_{safe_tag}_plate.jpg"
+                                _plate_wm = _draw_watermark(
+                                    vehicle_crop[py1:py2, px1:px2].copy())
                                 cv2.imwrite(os.path.join(DETECTIONS_DIR, plate_crop_name),
-                                            vehicle_crop[py1:py2, px1:px2],
+                                            _plate_wm,
                                             [cv2.IMWRITE_JPEG_QUALITY, 92])
                     except Exception as e:
                         print(f"[UHF-ANPR] FastALPR failed: {e}")
@@ -1603,13 +2157,195 @@ def capture_on_uhf_event(tag):
             )
             db.session.add(event)
             db.session.commit()
+            local_event_id = event.id
 
             print(f"[UHF-ANPR] tag={tag_c} plate={plate_text} owner={owner_name} "
                   f"status={status} full={full_name} plate_img={plate_crop_name}")
-            return event.to_dict()
+            result = event.to_dict()
+
+        # (TV push already fired right after the disk write above -- that
+        # runs in parallel with YOLO/OCR so the TV updates within ~1 s of
+        # the tag scan instead of waiting for the whole ML pipeline.)
+
+        # Best-effort cloud push (outside the DB context manager so the local
+        # commit lands first). Runs in a thread so a slow / offline cloud
+        # never blocks the gate flow. event_id lets the cloud UPDATE this
+        # exact row's image filenames instead of creating a duplicate whose
+        # uhf_* file only exists on the on-site disk (and 404s on cloud).
+        _push_uhf_event_to_cloud(
+            ts=ts, tag=tag_c, plate=plate_text, vehicle_type=vehicle_label,
+            confidence=plate_confidence, owner_name=owner_name,
+            department=department, status=status,
+            full_path=full_path,
+            plate_path=(os.path.join(DETECTIONS_DIR, plate_crop_name)
+                        if plate_crop_name else None),
+            event_id=local_event_id,
+        )
+        return result
     except Exception as e:
         print(f"[UHF-ANPR] DB write failed: {e}")
         return None
+
+
+def _push_uhf_event_to_cloud(ts, tag, plate, vehicle_type, confidence,
+                              owner_name, department, status,
+                              full_path, plate_path, event_id=None):
+    """Spawn a background thread that uploads this capture to the cloud admin
+    portal. No-op when CLOUD_PUSH_URL or CLOUD_PUSH_TOKEN env vars aren't set
+    (e.g. cloud-only deployments, or local-only test runs)."""
+    push_url   = (os.environ.get('CLOUD_PUSH_URL')   or '').rstrip('/')
+    push_token = (os.environ.get('CLOUD_PUSH_TOKEN') or '').strip()
+    if not push_url or not push_token:
+        return    # silently skip — cloud sync not configured
+
+    def _do_push():
+        import base64
+        import urllib.request
+        import urllib.error
+
+        def _read_and_downscale_b64(path, max_w=800, quality=60):
+            """Read a JPEG from disk, downscale + re-encode at lower quality,
+            base64-encode. Full-HD captures were ~200 KB each and the cloud
+            UHF Captures gallery only needs thumbnail-sized images. 800x450
+            @ q60 = ~25 KB, an 8x bandwidth saving. Loading 40 thumbnails
+            goes from 8 MB -> 1 MB, page load drops from ~15 s to ~2 s."""
+            if not path or not os.path.exists(path):
+                return None
+            try:
+                img = cv2.imread(path)
+                if img is None:
+                    return None
+                h, w = img.shape[:2]
+                if w > max_w:
+                    scale = max_w / float(w)
+                    img = cv2.resize(img, (max_w, int(h * scale)),
+                                     interpolation=cv2.INTER_AREA)
+                ok, buf = cv2.imencode('.jpg', img,
+                                       [cv2.IMWRITE_JPEG_QUALITY, quality])
+                if not ok or buf is None:
+                    return None
+                return base64.b64encode(buf.tobytes()).decode('ascii')
+            except Exception as e:
+                print(f"[UHF-CLOUD] downscale failed for {path}: {e}")
+                return None
+
+        payload = {
+            "timestamp":       ts.strftime("%Y-%m-%d %H:%M:%S") if ts else None,
+            "rfid_tag":        tag,
+            "plate":           plate or '',
+            "vehicle_type":    vehicle_type or '',
+            "confidence":      float(confidence or 0.0),
+            "owner_name":      owner_name or '',
+            "department":      department or '',
+            "status":          status or 'UNKNOWN',
+            # Cloud uses this to UPDATE the shared-DB row instead of creating a
+            # duplicate. Skipping it (event_id=None) triggers legacy insert path.
+            "event_id":        event_id,
+            # Downscale + re-encode before pushing:
+            #   full image  -> 800px wide  @ q60 (~25 KB)  — good enough for
+            #                                                the cloud gallery
+            #   plate crop  -> 400px wide  @ q75 (~10 KB)  — needs to stay
+            #                                                sharp for humans
+            "full_image_b64":  _read_and_downscale_b64(full_path,  max_w=800, quality=60),
+            "plate_image_b64": _read_and_downscale_b64(plate_path, max_w=400, quality=75),
+        }
+        data_bytes = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            push_url + '/api/cloud_push/uhf',
+            data=data_bytes,
+            method='POST',
+            headers={
+                'Content-Type':  'application/json',
+                'Authorization': f'Bearer {push_token}',
+            },
+        )
+        for attempt in (1, 2, 3):
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    body = resp.read().decode('utf-8', errors='replace')
+                    print(f"[UHF-CLOUD] pushed tag={tag} attempt={attempt} -> {resp.status} {body[:120]}")
+                    return
+            except (urllib.error.URLError, urllib.error.HTTPError) as e:
+                code = getattr(e, 'code', '?')
+                print(f"[UHF-CLOUD] push attempt {attempt} failed (HTTP {code}): {e}")
+                if attempt < 3:
+                    time.sleep(2 * attempt)
+            except Exception as e:
+                print(f"[UHF-CLOUD] push attempt {attempt} unexpected error: {e}")
+                if attempt < 3:
+                    time.sleep(2 * attempt)
+        print(f"[UHF-CLOUD] giving up after 3 attempts; tag={tag}")
+
+    threading.Thread(target=_do_push, daemon=True).start()
+
+
+def cloud_frame_pusher():
+    """Push camera_loop's already-annotated JPEG (vehicle boxes + plate text +
+    status dot) to the cloud admin portal so /video_feed at
+    https://vayaccess-cloud.onrender.com/ shows the same live view the on-site
+    operator sees. Outbound-only (no VPN / no inbound firewall holes).
+
+    Reads `latest_jpeg` — camera_loop() already produced it at ~15 fps with
+    all ANPR overlays and JPEG-encoded at quality 60. We just forward those
+    bytes. No re-encode, no annotation loss.
+
+    Throttled by:
+       CLOUD_STREAM_FPS      — frames/sec sent to cloud (default 10)
+    Skips silently when CLOUD_PUSH_URL / CLOUD_PUSH_TOKEN aren't set."""
+    push_url   = (os.environ.get('CLOUD_PUSH_URL')   or '').rstrip('/')
+    push_token = (os.environ.get('CLOUD_PUSH_TOKEN') or '').strip()
+    if not push_url or not push_token:
+        print("[CLOUD-STREAM] disabled (set CLOUD_PUSH_URL + CLOUD_PUSH_TOKEN in .env)")
+        return
+
+    try:
+        fps = float(os.environ.get('CLOUD_STREAM_FPS', '10'))
+    except ValueError:
+        fps = 10.0
+    period = max(0.05, 1.0 / max(0.5, fps))
+
+    import urllib.request, urllib.error
+    headers = {'Authorization': f'Bearer {push_token}',
+               'Content-Type':  'image/jpeg'}
+    endpoint = push_url + '/api/cloud_push/frame'
+
+    pushed   = 0
+    failures = 0
+    last_id  = -1
+    print(f"[CLOUD-STREAM] starting pusher -> {endpoint} fps={fps} jpeg_q={_STREAM_JPEG_Q}")
+
+    while True:
+        time.sleep(period)
+        # Grab pre-encoded, pre-annotated JPEG produced by camera_loop.
+        with frame_lock:
+            fid  = frame_id
+            body = latest_jpeg
+        # Skip if camera_loop hasn't produced a new frame since last push —
+        # avoids spamming Render bandwidth with duplicate frames when nothing
+        # has changed at the gate.
+        if body is None or fid == last_id:
+            continue
+        last_id = fid
+
+        req = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                _ = resp.status   # 204 expected
+            pushed += 1
+            # Heartbeat every 60 successful frames so the operator can confirm
+            # the stream is live without flooding stdout.
+            if pushed % 60 == 1:
+                kb = (len(body) // 1024) if body else 0
+                print(f"[CLOUD-STREAM] pushed {pushed} frames "
+                      f"(failures={failures}, last={kb} KB)")
+        except urllib.error.HTTPError as e:
+            failures += 1
+            if failures % 30 == 1:
+                print(f"[CLOUD-STREAM] push HTTP error {e.code}: {e.reason}")
+        except Exception as e:
+            failures += 1
+            if failures % 30 == 1:
+                print(f"[CLOUD-STREAM] push network error: {e}")
 
 
 def rfid_monitor():
@@ -1835,16 +2571,48 @@ _CLOUD_PIXEL_PNG = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00'
                     b'\x00\rIDATx\x9cc\xfc\xcf\xc0P\x0f\x00\x05\x01\x01\x00'
                     b'\xa5\xf6E\x84\x00\x00\x00\x00IEND\xaeB`\x82')
 
+def _cloud_mjpeg_gen():
+    """MJPEG generator for CLOUD_MODE — serves the most recent frame pushed
+    by the on-site PC via /api/cloud_push/frame. Yields a new boundary each
+    time the buffered frame changes (tracked by id(buf)); this way the
+    browser refresh rate matches the push rate exactly instead of being
+    capped by a fixed sleep. Falls back to a 20 ms poll interval when there
+    are no new frames so a stalled agent doesn't spin a Python loop hot."""
+    boundary  = b'--frame\r\n'
+    last_buf  = None
+    while True:
+        with cloud_frame_lock:
+            buf  = latest_cloud_frame
+            recv = latest_cloud_frame_at
+        stale = (recv is None) or ((datetime.now() - recv).total_seconds() > 15)
+        if buf and not stale and buf is not last_buf:
+            last_buf = buf
+            yield (boundary +
+                   b'Content-Type: image/jpeg\r\n'
+                   b'Content-Length: ' + str(len(buf)).encode() + b'\r\n\r\n' +
+                   buf + b'\r\n')
+        # Short sleep so we don't burn CPU polling; the push side ticks at
+        # ~10 fps (100 ms) so a 20 ms check is 5x oversampled but keeps
+        # perceived latency minimal.
+        time.sleep(0.02)
+
+
 @app.route('/video_feed')
 def video_feed():
     if CLOUD_MODE:
-        return Response(_CLOUD_PIXEL_PNG, mimetype='image/png')
+        return Response(_cloud_mjpeg_gen(),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
     return Response(gen_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/latest_frame.jpg')
 def get_latest_frame():
     if CLOUD_MODE:
+        with cloud_frame_lock:
+            buf = latest_cloud_frame
+            recv = latest_cloud_frame_at
+        if buf and recv and (datetime.now() - recv).total_seconds() <= 30:
+            return Response(buf, mimetype='image/jpeg')
         return Response(_CLOUD_PIXEL_PNG, mimetype='image/png')
     with frame_lock:
         jpeg_b = latest_jpeg
@@ -1923,6 +2691,18 @@ def get_logs():
             if w.number_plate:
                 wl_by_plate[w.number_plate.upper()] = w
 
+        # UHF captures keyed by tag, sorted newest-first. We match each log
+        # row to the nearest capture within a small time window so the
+        # Reports table can show the vehicle + plate photo inline.
+        uhf_by_tag = {}
+        if logs:
+            oldest_ts = min(l.timestamp for l in logs if l.timestamp)
+            uhf_candidates = (UHFEntryEvent.query
+                              .filter(UHFEntryEvent.timestamp >= (oldest_ts - timedelta(minutes=5)))
+                              .order_by(UHFEntryEvent.timestamp.desc()).all())
+            for ev in uhf_candidates:
+                uhf_by_tag.setdefault(ev.rfid_tag.upper(), []).append(ev)
+
         out = []
         for log in logs:
             d = log.to_dict()
@@ -1946,6 +2726,21 @@ def get_logs():
                     d['number_plate'] = wl.number_plate or 'N/A'
                 if d.get('vehicle_type') in ('N/A', '', None):
                     d['vehicle_type'] = wl.vehicle_type or 'N/A'
+            # Attach the closest UHF capture's image filenames (within ±30s
+            # of the log row). Empty strings stay empty if there's no capture
+            # — Reports renders them as a placeholder thumb.
+            d['full_image'] = ''
+            d['plate_image'] = ''
+            if tag and tag in uhf_by_tag and log.timestamp:
+                best, best_dt = None, None
+                for ev in uhf_by_tag[tag]:
+                    if not ev.timestamp: continue
+                    dt = abs((ev.timestamp - log.timestamp).total_seconds())
+                    if dt <= 30 and (best_dt is None or dt < best_dt):
+                        best, best_dt = ev, dt
+                if best:
+                    d['full_image']  = best.full_image  or ''
+                    d['plate_image'] = best.plate_image or ''
             out.append(d)
         return jsonify(out)
     except Exception as e:
@@ -1994,20 +2789,247 @@ def resume_feed():
     freeze_feed = False
     return jsonify({"status": "success"})
 
+# ── Public kiosk display for a phone / tablet / TV browser ───────────────────
+# Opens as a full-screen page that shows the LATEST UHF capture image with
+# owner name, tag, status, and timestamp overlaid. Polls the companion JSON
+# endpoint every 2 s and swaps the image the moment a new capture lands.
+# INTENTIONALLY not @login_required -- kiosk devices can't type passwords.
+# For LAN-only exposure the router's firewall is the boundary; if you ever
+# port-forward this app to the public internet, put it behind a reverse proxy
+# with basic-auth or a query token.
+@app.route('/api/uhf_display_latest')
+def api_uhf_display_latest():
+    row = (UHFEntryEvent.query
+           .order_by(UHFEntryEvent.timestamp.desc())
+           .first())
+    if not row:
+        return jsonify({"empty": True})
+    return jsonify({
+        "empty":      False,
+        "id":         row.id,
+        "timestamp":  row.timestamp.strftime("%d/%m/%Y %H:%M:%S") if row.timestamp else "",
+        "rfid_tag":   row.rfid_tag or "",
+        "plate":      row.plate or "",
+        "owner_name": row.owner_name or "",
+        "status":     row.status or "",
+        "full_image": row.full_image or "",
+    })
+
+
+@app.route('/uhf_display')
+def uhf_display_page():
+    """Serve the kiosk HTML. Point any phone / tablet / TV browser at this URL
+    (e.g. http://<on-site-laptop-ip>:5002/uhf_display) and it will show the
+    latest UHF capture full-screen, updating within 2 s of every new scan."""
+    from flask import Response
+    html = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>VayAccess UHF Live Display</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; background: #000;
+    color: #fff; font-family: -apple-system, Segoe UI, sans-serif; overflow: hidden; }
+#stage { position: fixed; inset: 0; display: flex; align-items: center;
+    justify-content: center; }
+#stage img { max-width: 100vw; max-height: 100vh; object-fit: contain; display: block; }
+.empty { font-size: 24px; opacity: 0.7; text-align: center; padding: 40px; }
+.header { position: fixed; top: 0; left: 0; right: 0; padding: 14px 22px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent);
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 16px; z-index: 10; }
+.header .who { min-width: 0; }
+.header .owner { font-size: 22px; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.header .tag { font-family: monospace; font-size: 13px; opacity: 0.85; margin-top: 2px; }
+.header .plate { font-family: monospace; font-size: 16px; font-weight: 600;
+    letter-spacing: 1px; margin-top: 4px; }
+.status { padding: 6px 16px; border-radius: 16px; font-size: 15px;
+    font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.status.granted  { background: #16a34a; color: #fff; }
+.status.denied   { background: #dc2626; color: #fff; }
+.status.scanning { background: #475569; color: #fff; }
+.footer { position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 22px;
+    background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+    font-family: monospace; font-size: 18px; text-align: center; z-index: 10; }
+.pulse { position: fixed; top: 12px; right: 16px; width: 10px; height: 10px;
+    border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e;
+    z-index: 20; opacity: 0.6; }
+.pulse.stale { background: #eab308; box-shadow: 0 0 8px #eab308; }
+.pulse.dead  { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+</style>
+</head>
+<body>
+<div class="pulse" id="pulse" title="live"></div>
+<div id="stage"><div class="empty">Waiting for the first UHF capture…</div></div>
+<script>
+let lastId = null;
+let missed = 0;
+const $ = (id) => document.getElementById(id);
+
+async function poll() {
+  try {
+    const r = await fetch('/api/uhf_display_latest', {cache: 'no-store'});
+    const d = await r.json();
+    missed = 0;
+    $('pulse').className = 'pulse';
+    if (d.empty) {
+      $('stage').innerHTML = '<div class="empty">No captures yet.</div>';
+    } else if (d.id !== lastId) {
+      lastId = d.id;
+      const stRaw = (d.status || '').toLowerCase();
+      const stCls = stRaw.includes('grant') ? 'granted'
+                  : stRaw.includes('den')   ? 'denied'
+                  : 'scanning';
+      const imgUrl = d.full_image
+        ? '/image/' + encodeURIComponent(d.full_image) + '?v=' + d.id
+        : '';
+      $('stage').innerHTML = imgUrl
+        ? '<img src="' + imgUrl + '" alt="Latest capture">'
+        : '<div class="empty">(image not available)</div>';
+      const owner = d.owner_name || '(unknown owner)';
+      const plateLine = d.plate ? '<div class="plate">' + d.plate + '</div>' : '';
+      document.querySelectorAll('.header,.footer').forEach(e => e.remove());
+      const header = document.createElement('div');
+      header.className = 'header';
+      header.innerHTML =
+        '<div class="who">' +
+          '<div class="owner">' + owner + '</div>' +
+          '<div class="tag">EPC ' + d.rfid_tag + '</div>' +
+          plateLine +
+        '</div>' +
+        '<div class="status ' + stCls + '">' + (d.status || 'PROCESSING') + '</div>';
+      document.body.appendChild(header);
+      const footer = document.createElement('div');
+      footer.className = 'footer';
+      footer.textContent = d.timestamp;
+      document.body.appendChild(footer);
+    }
+  } catch (e) {
+    missed += 1;
+    $('pulse').className = missed >= 4 ? 'pulse dead' : 'pulse stale';
+  }
+  setTimeout(poll, 2000);
+}
+poll();
+</script>
+</body>
+</html>"""
+    return Response(html, mimetype='text/html')
+
+
+# ── Gate address setting -- watermark address configured from the UI ────────
+# GET returns the currently-active address (DB value overrides .env seed).
+# POST updates it -- takes effect on the next capture without restart.
+@app.route('/api/settings/gate_address', methods=['GET'])
+@login_required
+def api_get_gate_address():
+    val = Setting.get('gate_address_line', None)
+    if val is None:
+        val = _GATE_ADDRESS_LIVE or _GATE_ADDRESS
+    return jsonify({"value": val or "", "source": "database" if Setting.get('gate_address_line', None) is not None else "env"})
+
+@app.route('/api/settings/gate_address', methods=['POST'])
+@login_required
+def api_set_gate_address():
+    global _GATE_ADDRESS_LIVE
+    data = request.get_json(silent=True) or {}
+    val = (data.get('value') or '').strip()[:80]
+    try:
+        Setting.set('gate_address_line', val)
+        _GATE_ADDRESS_LIVE = val   # apply to the next capture immediately
+        return jsonify({"ok": True, "value": val})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"DB write failed: {e}"}), 500
+
+
 # ── Saved-plate gallery endpoints (ReolinkANPR pattern) ──────────────────────
 @app.route('/api/uhf_captures')
 @login_required
 def api_uhf_captures():
     """Recent UHF-triggered ANPR capture events with image filenames the
-    /image/<filename> route can serve."""
+    /image/<filename> route can serve.
+    Default 40 rows = 80 thumbnails to render. Loading 200 rows blocked
+    the page for ~15 s because the browser had to fetch 400 image files.
+    Callers that need more can pass ?limit=200 explicitly, capped at 1000."""
     try:
-        limit = min(int(request.args.get('limit', 200)), 1000)
+        limit = min(int(request.args.get('limit', 40)), 1000)
     except ValueError:
-        limit = 200
+        limit = 40
     rows = (UHFEntryEvent.query
             .order_by(UHFEntryEvent.timestamp.desc())
             .limit(limit).all())
     return jsonify([r.to_dict() for r in rows])
+
+
+@app.route('/api/uhf_captures/cleanup', methods=['POST'])
+@login_required
+def api_uhf_captures_cleanup():
+    """Delete UHFEntryEvent rows whose image files are missing from this
+    server's disk. Fixes the case where legacy captures inserted rows with
+    on-site laptop filenames (uhf_*) which the cloud viewer 404s on because
+    the JPEG lives only on the on-site laptop, not on Render.
+
+    Safe: for each row that has a duplicate (same rfid_tag within 5s) whose
+    image files DO exist, the missing-image row is deleted. For a row with
+    no duplicate, we just null out the missing filename fields so the row
+    itself survives (it's still valuable scan history) but no longer
+    generates a broken thumbnail."""
+    from datetime import timedelta as _td
+    scanned = 0
+    dropped = 0
+    nulled  = 0
+
+    rows = UHFEntryEvent.query.order_by(UHFEntryEvent.timestamp.desc()).all()
+    for row in rows:
+        scanned += 1
+        full_missing  = bool(row.full_image  and not os.path.exists(os.path.join(DETECTIONS_DIR, row.full_image)))
+        plate_missing = bool(row.plate_image and not os.path.exists(os.path.join(DETECTIONS_DIR, row.plate_image)))
+        if not full_missing and not plate_missing:
+            continue
+
+        # Look for a sibling row: same tag, within 5s, with WORKING images.
+        window_start = row.timestamp - _td(seconds=5)
+        window_end   = row.timestamp + _td(seconds=5)
+        sibling = (UHFEntryEvent.query
+                   .filter(UHFEntryEvent.id != row.id,
+                           UHFEntryEvent.rfid_tag == row.rfid_tag,
+                           UHFEntryEvent.timestamp >= window_start,
+                           UHFEntryEvent.timestamp <= window_end)
+                   .all())
+        sibling_with_working_images = None
+        for s in sibling:
+            s_full_ok  = bool(s.full_image  and os.path.exists(os.path.join(DETECTIONS_DIR, s.full_image)))
+            if s_full_ok:
+                sibling_with_working_images = s
+                break
+
+        if sibling_with_working_images is not None:
+            # A neighbor row already has the file. Delete this broken duplicate.
+            db.session.delete(row)
+            dropped += 1
+        else:
+            # No sibling with working images -- keep the scan record but
+            # blank out the missing filename fields so the frontend shows
+            # a clean empty cell instead of a placeholder.
+            if full_missing:  row.full_image  = None
+            if plate_missing: row.plate_image = None
+            nulled += 1
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({
+        "scanned": scanned,
+        "dropped_duplicates": dropped,
+        "nulled_orphans":     nulled,
+    })
 
 
 @app.route('/api/recent_detections')
@@ -2018,12 +3040,530 @@ def api_recent_detections():
 
 @app.route('/image/<path:filename>')
 def serve_detection_image(filename):
-    """Serve a saved plate-detection JPEG by filename (path-safe)."""
-    from flask import send_from_directory, abort
+    """Serve a saved plate-detection JPEG by filename (path-safe). Tries
+    the on-disk copy first (fast, works on the on-site laptop). If the file
+    is missing (Render redeployed and wiped its ephemeral disk), falls back
+    to the ImageBlob table -- the DB copy persists forever in Neon."""
+    from flask import send_from_directory, send_file, abort
+    from io import BytesIO
     safe = os.path.basename(filename)
     if not safe.lower().endswith('.jpg'):
         abort(404)
-    return send_from_directory(DETECTIONS_DIR, safe)
+    disk_path = os.path.join(DETECTIONS_DIR, safe)
+    if os.path.exists(disk_path):
+        return send_from_directory(DETECTIONS_DIR, safe)
+    # Disk miss -- try the DB. Also rehydrate the disk file so subsequent
+    # requests hit the fast path again until the next redeploy.
+    blob = ImageBlob.query.get(safe)
+    if blob and blob.data:
+        try:
+            with open(disk_path, 'wb') as f:
+                f.write(blob.data)
+        except Exception:
+            pass
+        return send_file(BytesIO(blob.data), mimetype=blob.mime or 'image/jpeg',
+                         download_name=safe, max_age=3600)
+    abort(404)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloud push ingest — on-site PC POSTs each UHF + ANPR capture here so the
+# admin webportal (running on Render) can show scans without needing inbound
+# access to the on-site network.
+#
+# Auth: shared bearer token (CLOUD_PUSH_TOKEN env var) — must match between
+# the on-site PC and Render. Set on Render via the dashboard; set on the
+# on-site PC in the .env file. NEVER commit the token.
+#
+# Payload (JSON):
+#   {
+#     "timestamp":       "2026-06-25 14:30:11",   # optional, server-stamps if absent
+#     "rfid_tag":        "E2801160600002...",
+#     "plate":           "AP12AB1234",            # optional
+#     "vehicle_type":    "Car",                   # optional
+#     "confidence":      0.87,                    # optional
+#     "owner_name":      "Jane",                  # optional
+#     "department":      "Engineering",           # optional
+#     "status":          "ACCESS GRANTED",
+#     "full_image_b64":  "<base64 JPEG>",         # optional, full vehicle frame
+#     "plate_image_b64": "<base64 JPEG>"          # optional, cropped plate
+#   }
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/cloud_push/uhf', methods=['POST'])
+def api_cloud_push_uhf():
+    import base64
+    expected = (os.environ.get('CLOUD_PUSH_TOKEN') or '').strip()
+    if not expected:
+        return jsonify({"error": "Cloud push not configured. Set CLOUD_PUSH_TOKEN."}), 503
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer ') or auth[7:].strip() != expected:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    tag = (data.get('rfid_tag') or '').strip().upper()
+    if not tag:
+        return jsonify({"error": "rfid_tag is required."}), 400
+
+    # Parse timestamp; fall back to now() if missing/malformed.
+    ts_raw = (data.get('timestamp') or '').strip()
+    try:
+        ts = datetime.strptime(ts_raw, "%Y-%m-%d %H:%M:%S") if ts_raw else datetime.now()
+    except ValueError:
+        ts = datetime.now()
+
+    # Save images (if provided) under detections/ AND into the ImageBlob
+    # table. On Render the detections/ folder is ephemeral (wiped on every
+    # redeploy) -- the DB copy is what makes them survive. /image/<filename>
+    # falls back to the DB row if the on-disk file is missing.
+    def _save_b64_image(b64, suffix):
+        if not b64:
+            return None
+        try:
+            raw = base64.b64decode(b64)
+        except Exception:
+            return None
+        if len(raw) > 8 * 1024 * 1024:   # 8 MB hard cap per image
+            return None
+        safe_tag = ''.join(c for c in tag if c.isalnum())[:24] or 'TAG'
+        ts_str = ts.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        name = f"cloud_{ts_str}_{safe_tag}_{suffix}.jpg"
+        path = os.path.join(DETECTIONS_DIR, name)
+        # Best-effort disk write; failure is fine because the DB copy is authoritative.
+        try:
+            with open(path, 'wb') as f:
+                f.write(raw)
+        except Exception as e:
+            print(f"[CLOUD-INGEST] disk write failed for {name}: {e} (DB copy still saved)")
+        # Persistent DB copy. Upsert so a duplicate filename (retry) doesn't crash.
+        try:
+            existing_blob = ImageBlob.query.get(name)
+            if existing_blob:
+                existing_blob.data = raw
+                existing_blob.size_bytes = len(raw)
+                existing_blob.created_at = ts
+            else:
+                db.session.add(ImageBlob(filename=name, data=raw,
+                                         size_bytes=len(raw), created_at=ts))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"[CLOUD-INGEST] DB blob save failed for {name}: {e}")
+        return name
+
+    full_name  = _save_b64_image(data.get('full_image_b64'),  'full')
+    plate_name = _save_b64_image(data.get('plate_image_b64'), 'plate')
+
+    try:
+        # If the on-site agent sends the local DB row's id (event_id), we
+        # UPDATE that existing row's image filenames to the cloud-saved
+        # versions -- instead of creating a duplicate row whose uhf_* image
+        # only exists on the on-site laptop's disk (and 404s on the cloud
+        # viewer, especially on mobile where fallback UI is worst).
+        try:
+            event_id = int(data.get('event_id') or 0)
+        except (ValueError, TypeError):
+            event_id = 0
+
+        existing = None
+        if event_id > 0:
+            existing = UHFEntryEvent.query.get(event_id)
+
+        if existing:
+            # Point the shared DB row at the cloud-accessible filenames so
+            # cloud + mobile viewers can serve the JPEGs.
+            if full_name:  existing.full_image  = full_name
+            if plate_name: existing.plate_image = plate_name
+            # Fill in fields the on-site agent may have picked up but the
+            # earlier local insert missed (owner_name after whitelist lookup,
+            # status upgrade after tariff check, etc.).
+            for fld, key in (
+                ('plate','plate'),('vehicle_type','vehicle_type'),
+                ('confidence','confidence'),('owner_name','owner_name'),
+                ('department','department'),('status','status')):
+                val = data.get(key)
+                if val is not None and val != '':
+                    if fld == 'plate':
+                        setattr(existing, fld, str(val).strip().upper() or None)
+                    elif fld == 'confidence':
+                        try: setattr(existing, fld, float(val))
+                        except (TypeError, ValueError): pass
+                    else:
+                        setattr(existing, fld, str(val).strip() or None)
+            db.session.commit()
+            print(f"[CLOUD-INGEST] updated existing UHF row #{existing.id} "
+                  f"with cloud images (full={full_name}, plate={plate_name})")
+            return jsonify({"ok": True, "id": existing.id, "updated": True}), 200
+
+        # Legacy path -- on-site agent didn't send event_id (older client
+        # or the local DB insert failed). Insert a fresh row + AccessLog
+        # mirror so nothing is lost.
+        event = UHFEntryEvent(
+            timestamp=ts,
+            rfid_tag=tag,
+            plate=(data.get('plate') or '').strip().upper() or None,
+            vehicle_type=(data.get('vehicle_type') or '').strip() or None,
+            confidence=float(data.get('confidence') or 0.0),
+            full_image=full_name,
+            plate_image=plate_name,
+            owner_name=(data.get('owner_name') or '').strip() or None,
+            department=(data.get('department') or '').strip() or None,
+            status=(data.get('status') or 'UNKNOWN').strip(),
+        )
+        db.session.add(event)
+
+        # Also mirror as an AccessLog row so Reports → Gate Access Events sees it.
+        log = AccessLog(
+            timestamp=ts,
+            number_plate=event.plate or 'N/A',
+            rfid_tag=tag,
+            owner_name=event.owner_name or 'N/A',
+            department=event.department or '',
+            contact_number='',
+            vehicle_type=event.vehicle_type or 'N/A',
+            vehicle_category='',
+            status=event.status,
+        )
+        db.session.add(log)
+        db.session.commit()
+        print(f"[CLOUD-INGEST] tag={tag} plate={event.plate} status={event.status} "
+              f"full={full_name} plate_img={plate_name}")
+        return jsonify({"ok": True, "id": event.id}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[CLOUD-INGEST] DB write failed: {e}")
+        return jsonify({"error": "DB write failed"}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rescue endpoint — one-shot recovery of images that were captured BEFORE the
+# ImageBlob persistence fix landed. Render's ephemeral disk wiped the JPEG
+# files but the DB rows survived. The on-site laptop still has its own local
+# copies as uhf_<ts>_<tag>_full.jpg files; a companion script (rescue_images.py)
+# walks that folder and POSTs each file here. This endpoint matches by RFID
+# tag + timestamp window and inserts the bytes into the ImageBlob table
+# under the row's existing cloud filename so /image/<name> serves them.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/rescue_image', methods=['POST'])
+def api_rescue_image():
+    import base64
+    expected = (os.environ.get('CLOUD_PUSH_TOKEN') or '').strip()
+    if not expected:
+        return jsonify({"error": "server has no CLOUD_PUSH_TOKEN configured"}), 500
+    if request.headers.get('Authorization', '').replace('Bearer ', '') != expected:
+        return jsonify({"error": "unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    tag = (data.get('rfid_tag') or '').strip()
+    capture_iso = (data.get('capture_ts_iso') or '').strip()
+    image_b64 = data.get('image_b64') or ''
+    kind = (data.get('kind') or 'full').strip().lower()
+    if not tag or not capture_iso or not image_b64 or kind not in ('full', 'plate'):
+        return jsonify({"error": "missing rfid_tag / capture_ts_iso / image_b64 / kind"}), 400
+
+    try:
+        capture_ts = datetime.fromisoformat(capture_iso.replace('Z', '+00:00'))
+        if capture_ts.tzinfo is not None:
+            capture_ts = capture_ts.replace(tzinfo=None)
+    except ValueError:
+        return jsonify({"error": "capture_ts_iso must be ISO-8601"}), 400
+    try:
+        raw = base64.b64decode(image_b64)
+    except Exception:
+        return jsonify({"error": "image_b64 is not valid base64"}), 400
+    if len(raw) > 8 * 1024 * 1024:
+        return jsonify({"error": "image exceeds 8 MB"}), 400
+
+    # Find the closest UHFEntryEvent row within a 5-min window.
+    window_start = capture_ts - timedelta(minutes=5)
+    window_end   = capture_ts + timedelta(minutes=5)
+    row = (UHFEntryEvent.query
+           .filter(UHFEntryEvent.rfid_tag == tag,
+                   UHFEntryEvent.timestamp >= window_start,
+                   UHFEntryEvent.timestamp <= window_end)
+           .order_by(db.func.abs(db.func.extract('epoch',
+                                                 UHFEntryEvent.timestamp - capture_ts)))
+           .first())
+    if not row:
+        # Fall back to the newest row for this tag if nothing matched by time.
+        row = (UHFEntryEvent.query
+               .filter(UHFEntryEvent.rfid_tag == tag)
+               .order_by(UHFEntryEvent.timestamp.desc())
+               .first())
+    if not row:
+        return jsonify({"ok": False, "error": f"no UHFEntryEvent row for tag {tag}"}), 404
+
+    # Pick the filename to store the blob under. Prefer the row's existing
+    # cloud_* filename (that's what /image/<name> looks up); if the row has
+    # none, generate one that matches the naming convention.
+    existing_name = row.full_image if kind == 'full' else row.plate_image
+    if not existing_name:
+        safe_tag = ''.join(c for c in tag if c.isalnum())[:24] or 'TAG'
+        ts_str = capture_ts.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        existing_name = f"cloud_{ts_str}_{safe_tag}_{kind}.jpg"
+
+    try:
+        blob = ImageBlob.query.get(existing_name)
+        if blob:
+            blob.data = raw
+            blob.size_bytes = len(raw)
+        else:
+            db.session.add(ImageBlob(filename=existing_name, data=raw,
+                                     size_bytes=len(raw), created_at=capture_ts))
+        # Point the row at the blob filename if it wasn't already.
+        if kind == 'full' and row.full_image != existing_name:
+            row.full_image = existing_name
+        elif kind == 'plate' and row.plate_image != existing_name:
+            row.plate_image = existing_name
+        db.session.commit()
+        # Also drop it on disk as a fast-path cache.
+        try:
+            with open(os.path.join(DETECTIONS_DIR, existing_name), 'wb') as f:
+                f.write(raw)
+        except Exception:
+            pass
+        return jsonify({"ok": True, "matched_id": row.id,
+                        "filename": existing_name, "bytes": len(raw)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"DB write failed: {e}"}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOAP ingest for barcode / RFID whitelist + blacklist rows
+#
+# External barcode-issuance systems (visitor kiosks, pass printers, third-party
+# HR platforms) can POST an XML SOAP envelope to /api/soap/whitelist or
+# /api/soap/blacklist. Each request UPSERTS by <UtId> -- re-sends of the same
+# UtId update the existing row instead of creating a duplicate. Auth uses the
+# same Bearer CLOUD_PUSH_TOKEN as the other cloud-push endpoints.
+#
+# Full XML schema and example requests are in the "SOAP integration" section
+# of the README (also mirrored inline below in the docstring for /api/soap).
+# ─────────────────────────────────────────────────────────────────────────────
+def _soap_response(body_xml, status=200):
+    """Wrap a SOAP body fragment in a proper SOAP 1.1 envelope."""
+    envelope = ('<?xml version="1.0" encoding="utf-8"?>\n'
+                '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+                f'<soap:Body>{body_xml}</soap:Body>'
+                '</soap:Envelope>')
+    return Response(envelope, status=status, mimetype='text/xml; charset=utf-8')
+
+def _soap_fault(code, message, status=400):
+    """Standard SOAP Fault element -- the way SOAP surfaces errors."""
+    body = ('<soap:Fault>'
+            f'<faultcode>soap:{code}</faultcode>'
+            f'<faultstring>{message}</faultstring>'
+            '</soap:Fault>')
+    return _soap_response(body, status=status)
+
+def _xml_child_text(elem, tag_localname):
+    """Get text of the first direct child whose local name (namespace stripped)
+    matches. XML from real-world clients sometimes has custom namespaces so
+    matching on the local name only is more forgiving."""
+    for child in elem:
+        if child.tag.split('}')[-1] == tag_localname:
+            return (child.text or '').strip() if child.text else ''
+    return ''
+
+def _soap_parse_barcode(request):
+    """Parse a POST body that looks like:
+        <soap:Envelope>
+          <soap:Body>
+            <UpsertBarcode>
+              <UtId>UT-12345</UtId>
+              <Barcode>E280...</Barcode>          <!-- alias: RfidTag -->
+              <NumberPlate>TS09AB1234</NumberPlate>
+              <OwnerName>John Doe</OwnerName>
+              <Department>Engineering</Department>
+              <ContactNumber>9876543210</ContactNumber>
+              <VehicleType>Car</VehicleType>
+              <ValidUntil>2027-12-31</ValidUntil>  <!-- ISO-8601 date -->
+              <Reason>...</Reason>                 <!-- blacklist only -->
+              <Properties>{"any":"json"}</Properties>
+            </UpsertBarcode>
+          </soap:Body>
+        </soap:Envelope>
+    Returns a dict of the extracted fields (empty strings for missing tags)."""
+    import xml.etree.ElementTree as ET
+    raw = request.get_data(as_text=True) or ''
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as e:
+        return None, f"XML parse error: {e}"
+    # Walk down until we hit the wrapper element (any name works)
+    body = None
+    for elem in root.iter():
+        if elem.tag.split('}')[-1] == 'Body':
+            body = elem
+            break
+    if body is None or len(body) == 0:
+        return None, "SOAP envelope has no <soap:Body> or empty body"
+    payload = body[0]
+    out = {
+        'ut_id':          _xml_child_text(payload, 'UtId'),
+        # <Barcode>  -> 1D/2D printed barcode column
+        # <UhfTagId> (or legacy <RfidTag>) -> UHF EPC column
+        # These are two DIFFERENT fields on the same pass: a pass can have
+        # both a printed barcode AND an embedded UHF chip.
+        'barcode':        _xml_child_text(payload, 'Barcode'),
+        'uhf_tag_id':     _xml_child_text(payload, 'UhfTagId') or _xml_child_text(payload, 'RfidTag'),
+        'number_plate':   _xml_child_text(payload, 'NumberPlate'),
+        'owner_name':     _xml_child_text(payload, 'OwnerName'),
+        'department':     _xml_child_text(payload, 'Department'),
+        'contact_number': _xml_child_text(payload, 'ContactNumber'),
+        'vehicle_type':   _xml_child_text(payload, 'VehicleType') or 'Car',
+        'valid_until':    _xml_child_text(payload, 'ValidUntil'),
+        'reason':         _xml_child_text(payload, 'Reason'),
+        'properties':     _xml_child_text(payload, 'Properties'),
+    }
+    return out, None
+
+def _soap_check_auth(request):
+    """Bearer token in Authorization header, same as /api/cloud_push/*."""
+    expected = (os.environ.get('CLOUD_PUSH_TOKEN') or '').strip()
+    if not expected:
+        return "server has no CLOUD_PUSH_TOKEN configured"
+    got = (request.headers.get('Authorization') or '').replace('Bearer ', '').strip()
+    if got != expected:
+        return "unauthorized: Authorization header missing or wrong Bearer token"
+    return None
+
+@app.route('/api/soap/whitelist', methods=['POST'])
+def api_soap_whitelist():
+    """SOAP endpoint -- upsert a barcode into the whitelist table. UPSERT is
+    keyed on <UtId>: matching row updated, missing row created. Returns SOAP
+    envelope with <Id> and <Action> = 'created' | 'updated'."""
+    err = _soap_check_auth(request)
+    if err:
+        return _soap_fault('Client', err, status=401)
+    data, perr = _soap_parse_barcode(request)
+    if perr:
+        return _soap_fault('Client', perr, status=400)
+    ut_id = data['ut_id']
+    if not ut_id:
+        return _soap_fault('Client', 'UtId is required', status=400)
+    if not data['number_plate']:
+        return _soap_fault('Client', 'NumberPlate is required for whitelist rows', status=400)
+    if not data['owner_name']:
+        return _soap_fault('Client', 'OwnerName is required for whitelist rows', status=400)
+    # Parse ValidUntil (defaults to +1 year if missing)
+    try:
+        if data['valid_until']:
+            valid_until = datetime.fromisoformat(data['valid_until'].replace('Z', ''))
+        else:
+            valid_until = datetime.now() + timedelta(days=365)
+    except ValueError:
+        return _soap_fault('Client', 'ValidUntil must be ISO-8601 (YYYY-MM-DD)', status=400)
+    try:
+        row = Whitelist.query.filter_by(ut_id=ut_id).first()
+        action = 'updated' if row else 'created'
+        if not row:
+            row = Whitelist(ut_id=ut_id, number_plate=data['number_plate'],
+                            owner_name=data['owner_name'], valid_until=valid_until)
+            db.session.add(row)
+        else:
+            row.number_plate = data['number_plate']
+            row.owner_name   = data['owner_name']
+            row.valid_until  = valid_until
+        row.barcode        = data['barcode']        or row.barcode
+        row.rfid_tag       = data['uhf_tag_id']     or row.rfid_tag
+        # Default department to 'External' so the UI's "Registered" page
+        # (which filters WHERE department IS NOT NULL) shows every SOAP row.
+        # Vendor-supplied department always wins.
+        row.department     = data['department']     or row.department or 'External'
+        row.contact_number = data['contact_number'] or row.contact_number
+        row.vehicle_type   = data['vehicle_type']   or row.vehicle_type
+        row.properties     = data['properties']     or row.properties
+        # Stamp activated_at whenever it's currently NULL so the UI's default
+        # sort (activated_at DESC NULLS LAST) puts SOAP rows at the TOP, not
+        # buried on the last page. Applies to both new inserts AND existing
+        # rows that were created before this fix -- they'll get stamped on
+        # their next SOAP update. Once set, we never overwrite it.
+        if not row.activated_at:
+            row.activated_at = datetime.now()
+        db.session.commit()
+        body = ('<UpsertBarcodeResponse xmlns="https://vayaccess.com/soap">'
+                '<Status>OK</Status>'
+                f'<Action>{action}</Action>'
+                f'<Id>{row.id}</Id>'
+                f'<UtId>{ut_id}</UtId>'
+                '</UpsertBarcodeResponse>')
+        return _soap_response(body)
+    except Exception as e:
+        db.session.rollback()
+        return _soap_fault('Server', f"DB write failed: {e}", status=500)
+
+@app.route('/api/soap/blacklist', methods=['POST'])
+def api_soap_blacklist():
+    """SOAP endpoint -- upsert a barcode into the blacklist table. UPSERT is
+    keyed on <UtId>. Requires at least one of NumberPlate or Barcode."""
+    err = _soap_check_auth(request)
+    if err:
+        return _soap_fault('Client', err, status=401)
+    data, perr = _soap_parse_barcode(request)
+    if perr:
+        return _soap_fault('Client', perr, status=400)
+    ut_id = data['ut_id']
+    if not ut_id:
+        return _soap_fault('Client', 'UtId is required', status=400)
+    if not data['number_plate'] and not data['barcode'] and not data['uhf_tag_id']:
+        return _soap_fault('Client', 'At least one of NumberPlate / Barcode / UhfTagId is required', status=400)
+    try:
+        row = Blacklist.query.filter_by(ut_id=ut_id).first()
+        action = 'updated' if row else 'created'
+        if not row:
+            row = Blacklist(ut_id=ut_id)
+            db.session.add(row)
+        row.number_plate = data['number_plate'] or row.number_plate
+        row.barcode      = data['barcode']      or row.barcode
+        row.rfid_tag     = data['uhf_tag_id']   or row.rfid_tag
+        row.reason       = data['reason']       or row.reason or ''
+        row.added_by     = 'soap-ingest'
+        row.properties   = data['properties']   or row.properties
+        db.session.commit()
+        body = ('<UpsertBarcodeResponse xmlns="https://vayaccess.com/soap">'
+                '<Status>OK</Status>'
+                f'<Action>{action}</Action>'
+                f'<Id>{row.id}</Id>'
+                f'<UtId>{ut_id}</UtId>'
+                '</UpsertBarcodeResponse>')
+        return _soap_response(body)
+    except Exception as e:
+        db.session.rollback()
+        return _soap_fault('Server', f"DB write failed: {e}", status=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloud frame ingest — the on-site PC's cloud_frame_pusher() thread posts a
+# JPEG frame every ~500 ms. Cloud holds only the latest one in RAM (capped at
+# ~1 MB) and serves it from /video_feed below. No DB writes, no disk writes
+# — keeps Render bandwidth + storage usage minimal.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/cloud_push/frame', methods=['POST'])
+def api_cloud_push_frame():
+    global latest_cloud_frame, latest_cloud_frame_at
+    expected = (os.environ.get('CLOUD_PUSH_TOKEN') or '').strip()
+    if not expected:
+        return jsonify({"error": "Cloud push not configured."}), 503
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer ') or auth[7:].strip() != expected:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    # Accept raw JPEG bytes (image/jpeg) — simpler + smaller than base64 JSON.
+    data = request.get_data() or b''
+    if not data or len(data) < 100:
+        return jsonify({"error": "empty frame"}), 400
+    if len(data) > 1_000_000:                # 1 MB hard cap per frame
+        return jsonify({"error": "frame too large"}), 413
+    # Cheap sanity check — JPEG always starts with FF D8 FF.
+    if data[:3] != b'\xff\xd8\xff':
+        return jsonify({"error": "not a JPEG"}), 400
+
+    with cloud_frame_lock:
+        latest_cloud_frame    = data
+        latest_cloud_frame_at = datetime.now()
+    return ('', 204)   # 204 No Content — minimum bandwidth for the ack
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Employee Activation (desktop SRK-F206 + /activate page)
@@ -2386,6 +3926,36 @@ def seed_defaults():
     has_login_capable_account = (
         Account.query.filter(Account.password_hash.isnot(None)).count() > 0
     )
+    # If the operator EXPLICITLY sets INITIAL_ADMIN_PASSWORD as an env var
+    # (Render dashboard), treat that as "reset the admin password on next
+    # boot." Without this branch, once the admin row exists nothing in
+    # INITIAL_ADMIN_PASSWORD has any effect — operators end up locked out
+    # of their own deploy. The env var must be PRESENT in the environment
+    # to qualify; an absent var falls through to the original logic so
+    # existing admin passwords are never silently overwritten.
+    explicit_pwd = os.environ.get('INITIAL_ADMIN_PASSWORD')
+    if explicit_pwd is not None and explicit_pwd.strip() != '':
+        admin_user = (os.environ.get('INITIAL_ADMIN_USER') or 'admin').strip() or 'admin'
+        if not Role.query.filter(db.func.lower(Role.name) == 'administrator').first():
+            db.session.add(Role(name='Administrator',
+                                description='Full system access (seeded on first boot)'))
+            db.session.commit()
+        existing = Account.query.filter(
+            db.func.lower(Account.name) == admin_user.lower()).first()
+        if existing:
+            existing.role = 'Administrator'
+            existing.set_password(explicit_pwd.strip())
+            action = 'password reset from INITIAL_ADMIN_PASSWORD'
+        else:
+            a = Account(name=admin_user, nickname='Initial Admin', role='Administrator')
+            a.set_password(explicit_pwd.strip())
+            db.session.add(a)
+            action = 'seeded from INITIAL_ADMIN_PASSWORD'
+        db.session.commit()
+        AuditEvent.log(f"Admin {action}: {admin_user}", area='System')
+        print(f"[OK] Admin {action}: {admin_user}")
+        has_login_capable_account = True
+
     if not has_login_capable_account:
         # Make sure the "Administrator" role exists so the admin_required
         # decorator can recognise it.
@@ -2416,6 +3986,85 @@ def seed_defaults():
                   "env var before first boot.")
         else:
             print(f"[OK] Initial admin {action}: {admin_user}")
+
+    # ── Parking-specific default roles + permission bundle ────────────────
+    # Seeded once (guarded by a Setting). Each role gets a starter permission
+    # matrix covering the sections that make sense for its job -- operator
+    # can edit any of it from the Permission Matrix UI after boot.
+    if Setting.get('parking_roles_seed_v1') != 'done':
+        _default_roles = [
+            ('Administrator',           'Full system access -- every module, every action'),
+            ('Parking Manager',         'Owns yards, tariffs, zones, whitelists + all reports'),
+            ('Gate Operator',           'Runs manual entry/exit + views live monitoring'),
+            ('Security Supervisor',     'Views scans, manages blacklist, no delete rights'),
+            ('Visitor Management',      'Creates + manages visitor passes'),
+            ('Cashier',                 'Handles exit payments + views transactions'),
+            ('Reports Viewer',          'Read-only across statistical + audit reports'),
+            ('IT / System Admin',       'System settings, accounts, roles, permissions'),
+        ]
+        for name, desc in _default_roles:
+            if not Role.query.filter(db.func.lower(Role.name) == name.lower()).first():
+                db.session.add(Role(name=name, description=desc))
+
+        # Sections mirror the sidebar's data-view keys.
+        SECTIONS = [
+            'dashboard','reports','video','parking-records','scanning-record',
+            'devices','exit','manual-entry','orders',
+            'membership','admin','registered','blacklist','yard',
+            'region','type-mgmt','visitors',
+            'account','lcd','equipment','menu-mgmt','role','role-perm',
+            'dictionary','audit-log','uhf-captures','driver-users',
+            'zone-live','settings-basic','settings-entry-exit',
+        ]
+        # Per-role default (read / write / delete) permissions per section.
+        # 'ALL_RW' == read+write everywhere; 'ALL_RWD' == +delete; each entry
+        # can also be a per-section dict for fine control.
+        _role_perms = {
+            'Administrator':       {s: ('read','write','delete') for s in SECTIONS},
+            'Parking Manager':     {s: ('read','write','delete') for s in
+                ['dashboard','reports','video','parking-records','scanning-record',
+                 'devices','manual-entry','exit','membership','admin','registered',
+                 'yard','region','type-mgmt','audit-log','uhf-captures','zone-live']},
+            'Gate Operator':       {s: ('read','write') for s in
+                ['dashboard','video','manual-entry','exit','parking-records',
+                 'scanning-record','uhf-captures','zone-live']},
+            'Security Supervisor': {s: ('read',) for s in
+                ['dashboard','video','parking-records','scanning-record','uhf-captures',
+                 'audit-log','zone-live','registered','visitors']}
+                | {'blacklist': ('read','write')},
+            'Visitor Management':  {s: ('read','write','delete') for s in
+                ['visitors','dashboard']}
+                | {'reports': ('read',)},
+            'Cashier':             {s: ('read','write') for s in
+                ['exit','parking-records','dashboard']},
+            'Reports Viewer':      {s: ('read',) for s in
+                ['dashboard','reports','audit-log','uhf-captures','zone-live','parking-records']},
+            'IT / System Admin':   {s: ('read','write','delete') for s in
+                ['dashboard','account','role','role-perm','menu-mgmt','equipment',
+                 'lcd','dictionary','settings-basic','settings-entry-exit','audit-log']},
+        }
+        seeded = 0
+        for role_name, matrix in _role_perms.items():
+            for section, actions in matrix.items():
+                for action in ('read','write','delete'):
+                    allowed = action in actions
+                    # Only insert if the (role, section, action) triple doesn't
+                    # already exist -- lets the operator override later without
+                    # this seeder clobbering their changes on subsequent boots.
+                    exists = (RolePermission.query
+                              .filter(db.func.lower(RolePermission.role_name)   == role_name.lower(),
+                                      db.func.lower(RolePermission.section_key) == section.lower(),
+                                      db.func.lower(RolePermission.action)      == action)
+                              .first())
+                    if not exists:
+                        db.session.add(RolePermission(
+                            role_name=role_name, section_key=section,
+                            action=action, allowed=allowed))
+                        seeded += 1
+        db.session.commit()
+        Setting.set('parking_roles_seed_v1', 'done')
+        print(f"[DB] parking-roles seed: {len(_default_roles)} roles, "
+              f"{seeded} permission rows inserted")
 
     # One-shot retag: collapse all legacy multi-zone values to the single
     # configured zone ('GMR Cargo Staff Parking'). Runs once, guarded by a
@@ -2559,7 +4208,16 @@ def api_entry_create():
         is_staff     = bool(data.get('staff')),
     )
     db.session.add(row); db.session.commit()
-    AuditEvent.log(f"Entry registered for {veh} via {row.mode}", area='Entry')
+    # Issue the entry ticket + bound QR now that the row id exists. The QR the
+    # entry ticket prints encodes this payload; scanning it at exit resolves
+    # this exact transaction (see /api/exits).
+    row.ticket_no = "VAY-%08d" % row.id
+    # The QR encodes a shareable URL to this ticket's public page (/v/<token>);
+    # scanning it on any phone opens the ticket, and the exit scanner resolves
+    # the same transaction from it.
+    row.qr_payload = _build_pass_url(_make_pass_token('t', row.id))
+    db.session.commit()
+    AuditEvent.log(f"Entry registered for {veh} via {row.mode} (ticket {row.ticket_no})", area='Entry')
     return jsonify({"status": "ok", "transaction": row.to_dict()})
 
 
@@ -2599,12 +4257,47 @@ def api_exit_close():
     if not q:
         return jsonify({"status": "error", "message": "Plate or tag is required"}), 400
 
+    # QR-scan support. The exit scanner may send any of:
+    #   • the ticket's QR URL   ".../v/<token>"  (what the printed ticket carries)
+    #   • a bare signed token    "t<id>-<sig>"
+    #   • the compact payload    "VAY|<ticketNo>|<plate>|IN"
+    #   • a bare ticket number   "VAY-00000001"
+    #   • a plate or tag         (original behaviour)
+    # A URL/token resolves the exact transaction id; the rest match by field.
+    raw_q = (data.get('query') or '').strip()
+    tx_id = None
+    _tok = None
+    if '/v/' in raw_q.lower():
+        _tok = raw_q.rsplit('/v/', 1)[-1].split('?')[0].split('#')[0].strip().strip('/')
+    elif raw_q.count('-') == 1 and raw_q[:1] in ('t', 'v', 'm'):
+        _tok = raw_q
+    if _tok:
+        parsed = _verify_pass_token(_tok)
+        if parsed and parsed[0] == 't':
+            tx_id = parsed[1]
+
+    ticket_q = None
+    if '|' in q:
+        parts = [p.strip().upper() for p in q.split('|')]
+        if len(parts) >= 2 and parts[0] == 'VAY':
+            ticket_q = parts[1] or None
+            if len(parts) >= 3 and parts[2]:
+                q = parts[2]          # plate from the QR, for the fallback match
+    elif q.startswith('VAY-'):
+        ticket_q = q
+
     # Exact match only — partial substring matches are a security hole here:
     # 'ABC' would close any plate containing 'ABC'. Require full equality.
     base_q = ParkingTransaction.query.filter(ParkingTransaction.exit_at.is_(None))
-    tx = (base_q.filter(or_(db.func.upper(ParkingTransaction.vehicle)  == q,
-                             db.func.upper(ParkingTransaction.identity) == q))
-                .order_by(ParkingTransaction.entry_at.desc()).first())
+    if tx_id is not None:
+        tx = base_q.filter(ParkingTransaction.id == tx_id).first()
+    else:
+        _conds = [db.func.upper(ParkingTransaction.vehicle)  == q,
+                  db.func.upper(ParkingTransaction.identity) == q]
+        if ticket_q:
+            _conds.append(db.func.upper(ParkingTransaction.ticket_no) == ticket_q)
+        tx = (base_q.filter(or_(*_conds))
+                    .order_by(ParkingTransaction.entry_at.desc()).first())
     if not tx:
         # Diagnose WHY: look for a recently-closed transaction OR a whitelist
         # entry — that lets us return a much more useful error than "no match"
@@ -2910,6 +4603,24 @@ def api_orders():
 
 
 # ── Yards (parking lots) ─────────────────────────────────────────────────────
+# Valid solution verticals + the eight capability flags a site can carry.
+_SITE_TYPES = {"Gated Community", "Shopping Mall", "Corporate Campus", "Street Parking"}
+_YARD_CAP_FIELDS = ("anpr", "rfid", "qr", "barrier", "guidance", "payments", "visitor", "access")
+
+
+def _apply_yard_solution(row, data):
+    """Copy site_type + capability flags from a request payload onto a Yard.
+    Only touches keys that are present, so a partial update leaves the rest."""
+    if 'site_type' in data:
+        st = (data.get('site_type') or '').strip()
+        row.site_type = st if st in _SITE_TYPES else (st or None)
+    caps = data.get('caps')
+    if isinstance(caps, dict):
+        for k in _YARD_CAP_FIELDS:
+            if k in caps:
+                setattr(row, f'cap_{k}', bool(caps.get(k)))
+
+
 @app.route('/api/yards', methods=['GET', 'POST'])
 @admin_required
 def api_yards():
@@ -2924,9 +4635,11 @@ def api_yards():
             capacity = 0
         if Yard.query.filter(db.func.lower(Yard.name) == name.lower()).first():
             return jsonify({"status": "error", "message": f"Yard '{name}' already exists"}), 400
-        db.session.add(Yard(name=name, capacity=capacity,
-                            location=(data.get('location') or '').strip() or None,
-                            region=(data.get('region') or '').strip() or None))
+        row = Yard(name=name, capacity=capacity,
+                   location=(data.get('location') or '').strip() or None,
+                   region=(data.get('region') or '').strip() or None)
+        _apply_yard_solution(row, data)
+        db.session.add(row)
         db.session.commit()
         AuditEvent.log(f"Yard added: {name}", area='Admin')
         return jsonify({"status": "ok"})
@@ -3316,6 +5029,7 @@ def api_yards_update(yid):
             pass
     if 'location' in d: row.location = (d.get('location') or '').strip() or None
     if 'region'   in d: row.region   = (d.get('region')   or '').strip() or None
+    _apply_yard_solution(row, d)
     db.session.commit()
     AuditEvent.log(f"Yard updated: {row.name}", area='Admin')
     return jsonify({"status": "ok", "yard": row.to_dict()})
@@ -3491,7 +5205,7 @@ def _verify_pass_token(token):
     if not _hmac.compare_digest(sig, expected):
         return None
     kind, rest = base[0], base[1:]
-    if kind not in ('v', 'm'):
+    if kind not in ('v', 'm', 't'):     # v=visitor, m=member, t=parking ticket
         return None
     try:
         return (kind, int(rest))
@@ -3499,8 +5213,13 @@ def _verify_pass_token(token):
         return None
 
 def _build_pass_url(token):
-    # Use the request's host so QR works on any deployment domain (local /
-    # Render / a custom domain) without configuration.
+    # A configured public/LAN base URL wins, so a QR scanned on a PHONE points
+    # at a host the phone can actually reach (its LAN IP, or the public domain)
+    # instead of 'localhost' — the #1 reason a scanned QR "doesn't open".
+    # Falls back to the request's own host when no base is set.
+    base = (Setting.get('public_base_url', '') or '').strip().rstrip('/')
+    if base:
+        return f"{base}/v/{token}"
     return f"{request.host_url.rstrip('/')}/v/{token}"
 
 
@@ -3704,6 +5423,32 @@ def pass_verify(token):
             "sub":        ("Pass is currently active — admit entry"
                            if is_valid else
                            "Pass is outside its validity window — DO NOT ADMIT"),
+        }
+    elif kind == 't':      # parking ticket / session
+        row = ParkingTransaction.query.get(row_id)
+        if not row:
+            ctx["error"] = "Parking ticket not found."
+            return render_template('pass_verify.html', **ctx), 404
+        inside = row.exit_at is None
+        end_t = row.exit_at or datetime.now()
+        dur = None
+        if row.entry_at:
+            mins = int(max(0, (end_t - row.entry_at).total_seconds()) // 60)
+            dur = "%dh %02dm" % (mins // 60, mins % 60)
+        ctx["pass_"] = {
+            "type":       "Parking Ticket",
+            "name":       row.ticket_no or ("VAY-%08d" % row.id),
+            "plate":      row.vehicle or "",
+            "subline":    f"Type: {row.vehicle_type or '—'} · Zone: {row.zone or '—'} · Mode: {row.mode or '—'}",
+            "purpose":    (f"Amount: ₹{row.total_amount}" if row.total_amount else ""),
+            "valid_from": row.entry_at.strftime("%Y-%m-%d %H:%M") if row.entry_at else "—",
+            "valid_to":   row.exit_at.strftime("%Y-%m-%d %H:%M") if row.exit_at else "Still inside",
+            "is_valid":   inside,
+            "status":     "INSIDE" if inside else "EXITED",
+            "sub":        (("Vehicle is currently parked" + (f" · {dur} so far" if dur else ""))
+                           if inside else
+                           ("Exited" + (f" · stayed {dur}" if dur else "") +
+                            (f" · ₹{row.total_amount} {row.payment_method or ''}" if row.total_amount else ""))),
         }
     else:   # 'm' = member
         row = Whitelist.query.get(row_id)
@@ -4065,6 +5810,624 @@ def api_uhf_hourly():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# VayAccess Driver Mobile API
+# Self-service endpoints consumed by the React Native app under /mobile.
+# Separate auth surface from the admin /api/login session cookie — drivers
+# authenticate with `Authorization: Bearer <token>` issued at /api/driver/login.
+# ─────────────────────────────────────────────────────────────────────────────
+import secrets as _drv_secrets
+
+def _driver_from_request():
+    """Resolve the calling driver from the Authorization header. Returns
+    the DriverUser instance or None."""
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    token = auth[7:].strip()
+    if not token:
+        return None
+    sess = DriverSession.query.get(token)
+    if not sess:
+        return None
+    try:
+        sess.last_seen = datetime.now()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return DriverUser.query.get(sess.driver_id)
+
+
+def _driver_auth_required(fn):
+    @wraps(fn)
+    def _w(*a, **kw):
+        drv = _driver_from_request()
+        if not drv:
+            return jsonify({"error": "Unauthorized"}), 401
+        request.driver = drv  # type: ignore[attr-defined]
+        return fn(*a, **kw)
+    return _w
+
+
+@app.route('/api/driver/register', methods=['POST'])
+def api_driver_register():
+    data = request.get_json(silent=True) or {}
+    name  = (data.get('name')  or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    phone = (data.get('phone') or '').strip()
+    pwd   = (data.get('password') or '').strip()
+    plate = (data.get('primary_plate') or '').strip().upper()
+    vtype = (data.get('primary_type')  or 'Car').strip()
+    if not name or not email or not pwd:
+        return jsonify({"error": "Name, email and password are required."}), 400
+    if len(pwd) < 6:
+        return jsonify({"error": "Password must be at least 6 characters."}), 400
+    if vtype not in ('Car', 'Bike'):
+        vtype = 'Car'
+    if DriverUser.query.filter_by(email=email).first():
+        return jsonify({"error": "An account with this email already exists."}), 409
+    u = DriverUser(name=name, email=email, phone=phone or None,
+                   primary_plate=plate or None, primary_type=vtype)
+    u.set_password(pwd)
+    db.session.add(u)
+    db.session.commit()
+    token = _drv_secrets.token_urlsafe(32)
+    db.session.add(DriverSession(token=token, driver_id=u.id))
+    db.session.commit()
+    AuditEvent.log(f"Driver registered: {email}", 'Driver')
+    return jsonify({"token": token, "user": u.to_dict()})
+
+
+@app.route('/api/driver/login', methods=['POST'])
+def api_driver_login():
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    pwd   = (data.get('password') or '').strip()
+    if not email or not pwd:
+        return jsonify({"error": "Email and password are required."}), 400
+    u = DriverUser.query.filter_by(email=email).first()
+    if not u or not u.check_password(pwd):
+        return jsonify({"error": "Invalid email or password."}), 401
+    token = _drv_secrets.token_urlsafe(32)
+    db.session.add(DriverSession(token=token, driver_id=u.id))
+    db.session.commit()
+    return jsonify({"token": token, "user": u.to_dict()})
+
+
+@app.route('/api/driver/logout', methods=['POST'])
+@_driver_auth_required
+def api_driver_logout():
+    auth = request.headers.get('Authorization', '')
+    token = auth[7:].strip()
+    sess = DriverSession.query.get(token)
+    if sess:
+        db.session.delete(sess)
+        db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route('/api/driver/me')
+@_driver_auth_required
+def api_driver_me():
+    return jsonify(request.driver.to_dict())
+
+
+@app.route('/api/driver/me', methods=['PUT'])
+@_driver_auth_required
+def api_driver_me_update():
+    data = request.get_json(silent=True) or {}
+    drv = request.driver
+    for fld, key in (('name', 'name'), ('phone', 'phone'),
+                     ('primary_plate', 'primary_plate'),
+                     ('primary_type', 'primary_type'),
+                     ('fastag_id', 'fastag_id')):
+        if key in data:
+            val = (data.get(key) or '').strip()
+            if fld == 'primary_plate':
+                val = val.upper()
+            if fld == 'primary_type' and val and val not in ('Car', 'Bike'):
+                val = 'Car'
+            setattr(drv, fld, val or None)
+    pwd = (data.get('password') or '').strip()
+    if pwd:
+        if len(pwd) < 6:
+            return jsonify({"error": "Password must be at least 6 characters."}), 400
+        drv.set_password(pwd)
+    db.session.commit()
+    return jsonify(drv.to_dict())
+
+
+@app.route('/api/driver/facilities')
+@_driver_auth_required
+def api_driver_facilities():
+    """List parking facilities (Yards) with live availability + tariffs.
+    Optional filter: ?region=<name>"""
+    region = (request.args.get('region') or '').strip()
+    q = Yard.query
+    if region:
+        q = q.filter(Yard.region == region)
+    yards = q.order_by(Yard.name.asc()).all()
+    tariffs = {t.vehicle_type: t.to_dict() for t in Tariff.query.all()}
+    out = []
+    for y in yards:
+        d = y.to_dict()
+        d['tariffs'] = tariffs
+        out.append(d)
+    return jsonify(out)
+
+
+@app.route('/api/driver/facilities/<int:yid>')
+@_driver_auth_required
+def api_driver_facility_detail(yid):
+    y = Yard.query.get_or_404(yid)
+    tariffs = {t.vehicle_type: t.to_dict() for t in Tariff.query.all()}
+    d = y.to_dict()
+    d['tariffs'] = tariffs
+    return jsonify(d)
+
+
+@app.route('/api/driver/regions')
+@_driver_auth_required
+def api_driver_regions():
+    return jsonify([r.to_dict() for r in Region.query.order_by(Region.name.asc()).all()])
+
+
+@app.route('/api/driver/reservations', methods=['GET', 'POST'])
+@_driver_auth_required
+def api_driver_reservations():
+    drv = request.driver
+    if request.method == 'GET':
+        rows = (DriverReservation.query
+                .filter_by(driver_id=drv.id)
+                .order_by(DriverReservation.start_at.desc()).all())
+        return jsonify([r.to_dict() for r in rows])
+    data = request.get_json(silent=True) or {}
+    yard_name = (data.get('yard') or '').strip()
+    plate     = (data.get('vehicle_plate') or drv.primary_plate or '').strip().upper()
+    vtype     = (data.get('vehicle_type')  or drv.primary_type  or 'Car').strip()
+    start_str = (data.get('start_at') or '').strip()
+    end_str   = (data.get('end_at')   or '').strip()
+    pay_meth  = (data.get('payment_method') or '').strip()
+    upi_id    = (data.get('upi_id') or '').strip()
+    txn_id    = (data.get('transaction_id') or '').strip()
+    amount    = data.get('amount') or 0
+    if not yard_name or not plate or not start_str or not end_str:
+        return jsonify({"error": "yard, vehicle_plate, start_at and end_at required."}), 400
+    if vtype not in ('Car', 'Bike'):
+        vtype = 'Car'
+    try:
+        start_at = datetime.strptime(start_str, '%Y-%m-%d %H:%M')
+        end_at   = datetime.strptime(end_str,   '%Y-%m-%d %H:%M')
+    except ValueError:
+        return jsonify({"error": "Use 'YYYY-MM-DD HH:MM' for start_at / end_at."}), 400
+    if end_at <= start_at:
+        return jsonify({"error": "end_at must be after start_at."}), 400
+    yard = Yard.query.filter_by(name=yard_name).first()
+    if not yard:
+        return jsonify({"error": "Unknown facility."}), 404
+    # Capacity guard — refuse if the yard is full at the requested moment.
+    if yard.occupied() >= (yard.capacity or 0) > 0:
+        return jsonify({"error": "Facility is full. Try another one."}), 409
+    r = DriverReservation(
+        driver_id=drv.id, yard_name=yard_name,
+        vehicle_plate=plate, vehicle_type=vtype,
+        start_at=start_at, end_at=end_at,
+        amount=int(amount) if amount else None,
+        payment_method=pay_meth or None,
+        upi_id=upi_id or None,
+        transaction_id=txn_id or None,
+        status='confirmed',
+    )
+    db.session.add(r)
+    db.session.flush()
+    # Notify the driver of the booking
+    db.session.add(DriverNotification(
+        driver_id=drv.id,
+        title=f"Reservation confirmed: {yard_name}",
+        body=f"{plate} · {start_at.strftime('%d %b %H:%M')} → {end_at.strftime('%H:%M')}",
+        kind='reservation',
+    ))
+    db.session.commit()
+    AuditEvent.log(f"Driver {drv.email} reserved {yard_name} for {plate}", 'Driver')
+    return jsonify(r.to_dict())
+
+
+@app.route('/api/driver/reservations/<int:rid>', methods=['DELETE'])
+@_driver_auth_required
+def api_driver_reservation_cancel(rid):
+    drv = request.driver
+    r = DriverReservation.query.filter_by(id=rid, driver_id=drv.id).first_or_404()
+    if r.status in ('consumed', 'cancelled'):
+        return jsonify({"error": f"Reservation already {r.status}."}), 409
+    r.status = 'cancelled'
+    db.session.add(DriverNotification(
+        driver_id=drv.id,
+        title=f"Reservation cancelled: {r.yard_name}",
+        body=f"{r.vehicle_plate} · {r.start_at.strftime('%d %b %H:%M')}",
+        kind='reservation',
+    ))
+    db.session.commit()
+    return jsonify(r.to_dict())
+
+
+@app.route('/api/driver/sessions/active')
+@_driver_auth_required
+def api_driver_active_session():
+    """Returns the driver's currently-open ParkingTransaction (if any), keyed
+    by their primary plate or any plate they've ever reserved on."""
+    drv = request.driver
+    plates = set()
+    if drv.primary_plate:
+        plates.add(drv.primary_plate.upper())
+    for r in DriverReservation.query.filter_by(driver_id=drv.id).all():
+        if r.vehicle_plate:
+            plates.add(r.vehicle_plate.upper())
+    if not plates:
+        return jsonify(None)
+    tx = (ParkingTransaction.query
+          .filter(ParkingTransaction.vehicle.in_(list(plates)))
+          .filter(ParkingTransaction.exit_at.is_(None))
+          .order_by(ParkingTransaction.entry_at.desc()).first())
+    return jsonify(tx.to_dict() if tx else None)
+
+
+@app.route('/api/driver/sessions/history')
+@_driver_auth_required
+def api_driver_history():
+    drv = request.driver
+    plates = set()
+    if drv.primary_plate:
+        plates.add(drv.primary_plate.upper())
+    for r in DriverReservation.query.filter_by(driver_id=drv.id).all():
+        if r.vehicle_plate:
+            plates.add(r.vehicle_plate.upper())
+    if not plates:
+        return jsonify([])
+    rows = (ParkingTransaction.query
+            .filter(ParkingTransaction.vehicle.in_(list(plates)))
+            .order_by(ParkingTransaction.entry_at.desc()).limit(200).all())
+    return jsonify([r.to_dict() for r in rows])
+
+
+@app.route('/api/driver/notifications')
+@_driver_auth_required
+def api_driver_notifications():
+    drv = request.driver
+    rows = (DriverNotification.query
+            .filter_by(driver_id=drv.id)
+            .order_by(DriverNotification.created_at.desc()).limit(100).all())
+    return jsonify([r.to_dict() for r in rows])
+
+
+@app.route('/api/driver/notifications/<int:nid>/read', methods=['POST'])
+@_driver_auth_required
+def api_driver_notification_read(nid):
+    drv = request.driver
+    n = DriverNotification.query.filter_by(id=nid, driver_id=drv.id).first_or_404()
+    if not n.read_at:
+        n.read_at = datetime.now()
+        db.session.commit()
+    return jsonify(n.to_dict())
+
+
+@app.route('/api/driver/qr_pass')
+@_driver_auth_required
+def api_driver_qr_pass():
+    """Issue a signed QR token for the driver's current/upcoming reservation
+    so the gate kiosk's scanner can verify it via /v/<token>."""
+    drv = request.driver
+    now = datetime.now()
+    r = (DriverReservation.query
+         .filter_by(driver_id=drv.id, status='confirmed')
+         .filter(DriverReservation.end_at >= now)
+         .order_by(DriverReservation.start_at.asc()).first())
+    if not r:
+        return jsonify({"error": "No active reservation."}), 404
+    # Reuse the existing pass-token signer used for visitor QR codes.
+    token = _make_pass_token('reservation', r.id)
+    return jsonify({
+        "reservation": r.to_dict(),
+        "token":       token,
+        "pass_url":    request.host_url.rstrip('/') + f"/v/{token}",
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Zone-wise gate entry — live snapshot. Each ParkingTransaction is tagged with
+# the zone its UHF/ANPR reader sits in (e.g. Basement A, North Gate). This
+# endpoint buckets currently-parked vehicles by zone + lists each zone's most
+# recent gate entries. Powers both the admin Zone Live widget and the mobile
+# Zones screen.
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_zone_snapshot(recent_limit=8, since_hours=1):
+    """Returns [{ zone, capacity, occupied, available, recent: [...] }, ...]
+    Yards drive the canonical zone list (so a zone with capacity but no
+    vehicles still shows). Any ParkingTransaction zone that isn't a yard is
+    appended as an 'Other' bucket so nothing gets swallowed."""
+    since = datetime.now() - timedelta(hours=since_hours)
+    yards = Yard.query.order_by(Yard.name.asc()).all()
+    by_zone = {}
+    for y in yards:
+        by_zone[y.name] = {
+            "zone":      y.name,
+            "region":    y.region or "",
+            "location":  y.location or "",
+            "capacity":  y.capacity or 0,
+            "occupied":  0,
+            "available": y.capacity or 0,
+            "recent":    [],
+            "entries_last_hour": 0,
+            "exits_last_hour":   0,
+        }
+
+    # Currently-parked vehicles per zone
+    open_tx = (ParkingTransaction.query
+               .filter(ParkingTransaction.exit_at.is_(None)).all())
+    for tx in open_tx:
+        z = tx.zone or 'Unzoned'
+        if z not in by_zone:
+            by_zone[z] = {"zone": z, "region": "", "location": "",
+                          "capacity": 0, "occupied": 0, "available": 0,
+                          "recent": [], "entries_last_hour": 0,
+                          "exits_last_hour": 0}
+        by_zone[z]['occupied'] += 1
+        cap = by_zone[z]['capacity']
+        by_zone[z]['available'] = max(0, cap - by_zone[z]['occupied']) if cap else 0
+
+    # Recent gate entries (window = since_hours)
+    recent_entries = (ParkingTransaction.query
+                      .filter(ParkingTransaction.entry_at >= since)
+                      .order_by(ParkingTransaction.entry_at.desc()).all())
+    for tx in recent_entries:
+        z = tx.zone or 'Unzoned'
+        if z not in by_zone:
+            by_zone[z] = {"zone": z, "region": "", "location": "",
+                          "capacity": 0, "occupied": 0, "available": 0,
+                          "recent": [], "entries_last_hour": 0,
+                          "exits_last_hour": 0}
+        by_zone[z]['entries_last_hour'] += 1
+        if len(by_zone[z]['recent']) < recent_limit:
+            by_zone[z]['recent'].append({
+                "id":           tx.id,
+                "vehicle":      tx.vehicle,
+                "vehicle_type": tx.vehicle_type,
+                "owner":        tx.owner_name or "",
+                "mode":         tx.mode,
+                "entry_at":     tx.entry_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "still_parked": tx.exit_at is None,
+            })
+
+    recent_exits = (ParkingTransaction.query
+                    .filter(ParkingTransaction.exit_at.isnot(None))
+                    .filter(ParkingTransaction.exit_at >= since).all())
+    for tx in recent_exits:
+        z = tx.zone or 'Unzoned'
+        if z in by_zone:
+            by_zone[z]['exits_last_hour'] += 1
+
+    # Stable order: yards first (alpha), then any unzoned/foreign buckets.
+    yard_names = [y.name for y in yards]
+    ordered = [by_zone[n] for n in yard_names if n in by_zone]
+    extras  = [v for k, v in by_zone.items() if k not in yard_names]
+    extras.sort(key=lambda r: r['zone'].lower())
+    return ordered + extras
+
+
+@app.route('/api/zones')
+@login_required
+def api_zones():
+    """Admin webportal: zone-wise live gate entry snapshot."""
+    return jsonify(_build_zone_snapshot())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Combined snapshot for mobile (one round-trip live refresh) + admin-side
+# driver-user operations that the mobile sees immediately.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/driver/live')
+@_driver_auth_required
+def api_driver_live():
+    """Single-shot snapshot the mobile app polls every few seconds while
+    foregrounded. Returns the driver's profile, active parking session,
+    upcoming + recent reservations, last 20 notifications, and unread count
+    in one response so we don't fan-out 4 GETs from the device."""
+    drv = request.driver
+
+    # Active session — joined by any plate the driver has used.
+    plates = set()
+    if drv.primary_plate: plates.add(drv.primary_plate.upper())
+    res_rows = (DriverReservation.query
+                .filter_by(driver_id=drv.id)
+                .order_by(DriverReservation.start_at.desc()).all())
+    for r in res_rows:
+        if r.vehicle_plate: plates.add(r.vehicle_plate.upper())
+
+    active = None
+    if plates:
+        tx = (ParkingTransaction.query
+              .filter(ParkingTransaction.vehicle.in_(list(plates)))
+              .filter(ParkingTransaction.exit_at.is_(None))
+              .order_by(ParkingTransaction.entry_at.desc()).first())
+        if tx:
+            active = tx.to_dict()
+
+    notifs = (DriverNotification.query
+              .filter_by(driver_id=drv.id)
+              .order_by(DriverNotification.created_at.desc()).limit(20).all())
+    unread = (DriverNotification.query
+              .filter_by(driver_id=drv.id)
+              .filter(DriverNotification.read_at.is_(None)).count())
+
+    return jsonify({
+        "user":          drv.to_dict(),
+        "active":        active,
+        "reservations":  [r.to_dict() for r in res_rows[:20]],
+        "notifications": [n.to_dict() for n in notifs],
+        "unread":        unread,
+        # Zone-wise gate entries — driver sees every zone's live occupancy +
+        # recent entries (helps locate their own vehicle if they forgot the gate).
+        "zones":         _build_zone_snapshot(recent_limit=5, since_hours=1),
+        "server_time":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin → Driver Users operations (visible to a specific user immediately
+# because the mobile polls /api/driver/live).
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/admin/drivers', methods=['GET'])
+@login_required
+def api_admin_drivers():
+    """Admin webportal: list registered mobile drivers with live status flags
+    (currently parked? unread alerts? last seen via session row)."""
+    q = (request.args.get('q') or '').strip().lower()
+    rows = DriverUser.query.order_by(DriverUser.created_at.desc()).all()
+    out = []
+    for u in rows:
+        d = u.to_dict()
+        # Live flags — kept cheap; each is one indexed query.
+        plates = set()
+        if u.primary_plate: plates.add(u.primary_plate.upper())
+        for r in DriverReservation.query.filter_by(driver_id=u.id).all():
+            if r.vehicle_plate: plates.add(r.vehicle_plate.upper())
+        d['active'] = bool(plates and ParkingTransaction.query
+                           .filter(ParkingTransaction.vehicle.in_(list(plates)))
+                           .filter(ParkingTransaction.exit_at.is_(None))
+                           .first())
+        d['unread'] = (DriverNotification.query
+                       .filter_by(driver_id=u.id)
+                       .filter(DriverNotification.read_at.is_(None)).count())
+        d['reservation_count'] = DriverReservation.query.filter_by(driver_id=u.id).count()
+        last = (DriverSession.query.filter_by(driver_id=u.id)
+                .order_by(DriverSession.last_seen.desc()).first())
+        d['last_seen'] = last.last_seen.strftime("%Y-%m-%d %H:%M") if last and last.last_seen else ""
+        if q:
+            blob = f"{u.name} {u.email} {u.phone or ''} {u.primary_plate or ''}".lower()
+            if q not in blob: continue
+        out.append(d)
+    return jsonify(out)
+
+
+@app.route('/api/admin/drivers/<int:did>')
+@login_required
+def api_admin_driver_detail(did):
+    u = DriverUser.query.get_or_404(did)
+    reservations = (DriverReservation.query.filter_by(driver_id=did)
+                    .order_by(DriverReservation.start_at.desc()).all())
+    notifs = (DriverNotification.query.filter_by(driver_id=did)
+              .order_by(DriverNotification.created_at.desc()).limit(50).all())
+    plates = set()
+    if u.primary_plate: plates.add(u.primary_plate.upper())
+    for r in reservations:
+        if r.vehicle_plate: plates.add(r.vehicle_plate.upper())
+    sessions = []
+    if plates:
+        sessions = (ParkingTransaction.query
+                    .filter(ParkingTransaction.vehicle.in_(list(plates)))
+                    .order_by(ParkingTransaction.entry_at.desc()).limit(50).all())
+    return jsonify({
+        "user":         u.to_dict(),
+        "reservations": [r.to_dict() for r in reservations],
+        "sessions":     [s.to_dict() for s in sessions],
+        "notifications":[n.to_dict() for n in notifs],
+    })
+
+
+@app.route('/api/admin/drivers/<int:did>', methods=['PUT'])
+@admin_required
+def api_admin_driver_update(did):
+    """Admin edits driver fields. Mobile sees the change on its next live poll."""
+    u = DriverUser.query.get_or_404(did)
+    data = request.get_json(silent=True) or {}
+    for fld, key in (('name','name'), ('phone','phone'),
+                     ('primary_plate','primary_plate'),
+                     ('primary_type','primary_type'),
+                     ('fastag_id','fastag_id')):
+        if key in data:
+            val = (data.get(key) or '').strip()
+            if fld == 'primary_plate': val = val.upper()
+            if fld == 'primary_type' and val and val not in ('Car','Bike'): val = 'Car'
+            setattr(u, fld, val or None)
+    pwd = (data.get('password') or '').strip()
+    if pwd:
+        if len(pwd) < 6:
+            return jsonify({"error": "Password must be at least 6 characters."}), 400
+        u.set_password(pwd)
+        # Force-logout all existing sessions so old token stops working.
+        DriverSession.query.filter_by(driver_id=u.id).delete()
+    db.session.add(DriverNotification(
+        driver_id=u.id, title="Account updated by admin",
+        body=", ".join([k for k in ('name','phone','primary_plate','primary_type','fastag_id') if k in data]) or "Profile changes applied.",
+        kind='system',
+    ))
+    db.session.commit()
+    AuditEvent.log(f"Admin updated driver {u.email}", 'Driver')
+    return jsonify(u.to_dict())
+
+
+@app.route('/api/admin/drivers/<int:did>', methods=['DELETE'])
+@admin_required
+def api_admin_driver_delete(did):
+    u = DriverUser.query.get_or_404(did)
+    email = u.email
+    # Cascade clean — wipe their auth + alerts + reservations.
+    DriverSession.query.filter_by(driver_id=did).delete()
+    DriverNotification.query.filter_by(driver_id=did).delete()
+    DriverReservation.query.filter_by(driver_id=did).delete()
+    db.session.delete(u)
+    db.session.commit()
+    AuditEvent.log(f"Admin deleted driver {email}", 'Driver')
+    return jsonify({"ok": True})
+
+
+@app.route('/api/admin/drivers/<int:did>/notify', methods=['POST'])
+@login_required
+def api_admin_driver_notify(did):
+    """Admin pushes a notification to a specific driver. Surfaces on mobile
+    within the next live-poll tick (~5s)."""
+    DriverUser.query.get_or_404(did)
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip()
+    body  = (data.get('body')  or '').strip()
+    kind  = (data.get('kind')  or 'system').strip()
+    if not title:
+        return jsonify({"error": "Title is required."}), 400
+    n = DriverNotification(driver_id=did, title=title, body=body, kind=kind)
+    db.session.add(n)
+    db.session.commit()
+    AuditEvent.log(f"Admin notified driver {did}: {title}", 'Driver')
+    return jsonify(n.to_dict())
+
+
+@app.route('/api/admin/drivers/<int:did>/reservations/<int:rid>/cancel', methods=['POST'])
+@admin_required
+def api_admin_cancel_reservation(did, rid):
+    r = DriverReservation.query.filter_by(id=rid, driver_id=did).first_or_404()
+    if r.status in ('consumed','cancelled'):
+        return jsonify({"error": f"Already {r.status}."}), 409
+    r.status = 'cancelled'
+    db.session.add(DriverNotification(
+        driver_id=did,
+        title=f"Reservation cancelled by admin: {r.yard_name}",
+        body=f"{r.vehicle_plate} · {r.start_at.strftime('%d %b %H:%M')}",
+        kind='reservation',
+    ))
+    db.session.commit()
+    AuditEvent.log(f"Admin cancelled reservation {rid} for driver {did}", 'Driver')
+    return jsonify(r.to_dict())
+
+
+@app.route('/api/admin/drivers/<int:did>/logout_all', methods=['POST'])
+@admin_required
+def api_admin_driver_logout_all(did):
+    """Revoke every active mobile session — useful for stolen device / abuse."""
+    DriverUser.query.get_or_404(did)
+    n = DriverSession.query.filter_by(driver_id=did).delete()
+    db.session.commit()
+    AuditEvent.log(f"Admin revoked {n} sessions for driver {did}", 'Driver')
+    return jsonify({"revoked": n})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Boot — shared between dev (`python app.py`) and WSGI (`waitress-serve app:app`)
 # ─────────────────────────────────────────────────────────────────────────────
 def _boot():
@@ -4076,17 +6439,136 @@ def _boot():
         migrate_schema(db.engine)
         seed_defaults()
 
+    # Refresher for the live gate address (poll settings table every 15 s so
+    # UI edits show up on the next watermark without an app restart).
+    threading.Thread(target=_gate_address_refresher, daemon=True,
+                     name='gate-address-refresher').start()
+
     if CLOUD_MODE:
         print("[CLOUD] Skipping rfid/camera/worker threads — admin+reports API only")
         return
 
     rfid.start()
     desktop_rfid.start()
-    threading.Thread(target=rfid_monitor,  daemon=True).start()
-    threading.Thread(target=camera_loop,   daemon=True).start()
-    threading.Thread(target=worker_thread, daemon=True).start()
+    threading.Thread(target=rfid_monitor,       daemon=True).start()
+    threading.Thread(target=camera_loop,        daemon=True).start()
+    threading.Thread(target=worker_thread,      daemon=True).start()
+    # Cloud stream pusher — no-op if CLOUD_PUSH_URL/TOKEN aren't set in .env,
+    # so this line is safe on setups that don't want a cloud mirror.
+    threading.Thread(target=cloud_frame_pusher, daemon=True).start()
 
 _boot()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VAY Printer Service — ESC/POS ticket & receipt printing (BUVVAS / any ESC/POS)
+# The printer is a separate service (printer_service.py); these routes are the
+# HTTP API the parking app and the Printer console call. Config lives in the
+# Setting key/value table, so no schema migration is needed.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/printer/config', methods=['GET', 'POST'])
+@admin_required
+def api_printer_config():
+    if request.method == 'POST':
+        data = request.json or {}
+        cfg = printer.save_config(Setting, db, data)
+        AuditEvent.log("Printer settings updated", area='System')
+        return jsonify({"status": "ok", "config": cfg})
+    return jsonify(printer.load_config(Setting))
+
+
+@app.route('/api/printer/status', methods=['GET'])
+@login_required
+def api_printer_status():
+    return jsonify(printer.status(printer.load_config(Setting)))
+
+
+def _printer_qr_url(data):
+    """The QR should encode a shareable URL that opens the ticket page. If a
+    real ticket number is given, use that transaction's stored /v/ URL; for a
+    preview/sample, mint a demo /v/ token from the ticket number's digits."""
+    if data.get('qrData'):
+        return data['qrData']
+    tno = (data.get('ticketNo') or '').strip()
+    if tno:
+        tx = ParkingTransaction.query.filter(ParkingTransaction.ticket_no == tno).first()
+        if tx:
+            return tx.qr_payload or _build_pass_url(_make_pass_token('t', tx.id))
+    digits = ''.join(ch for ch in tno if ch.isdigit())
+    return _build_pass_url(_make_pass_token('t', int(digits) if digits else 0))
+
+
+@app.route('/api/printer/preview', methods=['POST'])
+@login_required
+def api_printer_preview():
+    """Render the exact ticket/receipt layout as text — no hardware needed.
+    kind = 'ticket' | 'receipt' | 'test'."""
+    d = request.json or {}
+    cfg = printer.load_config(Setting)
+    kind = (d.get('kind') or 'ticket').lower()
+    data = d.get('data') or {}
+    if kind != 'test':
+        data['qrData'] = _printer_qr_url(data)
+    if kind == 'receipt':
+        _, text = printer.build_receipt(cfg, data)
+        qr = printer.qr_datauri(printer.qr_payload('receipt', data))
+    elif kind == 'test':
+        _, text = printer.build_test(cfg)
+        qr = printer.qr_datauri('VAY-PRINTER-TEST')
+    else:
+        _, text = printer.build_ticket(cfg, data)
+        qr = printer.qr_datauri(printer.qr_payload('ticket', data))
+    return jsonify({"status": "ok", "kind": kind, "preview": text, "qr": qr})
+
+
+@app.route('/api/printer/test', methods=['POST'])
+@login_required
+def api_printer_test():
+    cfg = printer.load_config(Setting)
+    payload, text = printer.build_test(cfg)
+    res = printer.send(cfg, payload)
+    AuditEvent.log("Printer test print: %s" % ("ok" if res.get("ok") else "failed"), area='System')
+    return jsonify({"status": "ok" if res.get("ok") else "error",
+                    "message": res.get("message"), "preview": text})
+
+
+@app.route('/api/printer/print-ticket', methods=['POST'])
+@login_required
+def api_printer_print_ticket():
+    cfg = printer.load_config(Setting)
+    data = request.json or {}
+    data['qrData'] = _printer_qr_url(data)
+    payload, text = printer.build_ticket(cfg, data)
+    res = printer.send(cfg, payload)
+    AuditEvent.log("Ticket print %s: %s" % (data.get("ticketNo", ""),
+                   "ok" if res.get("ok") else "failed"), area='Gate')
+    return jsonify({"status": "ok" if res.get("ok") else "error",
+                    "message": res.get("message"), "preview": text,
+                    "qr": printer.qr_datauri(printer.qr_payload('ticket', data))})
+
+
+@app.route('/api/printer/print-receipt', methods=['POST'])
+@login_required
+def api_printer_print_receipt():
+    cfg = printer.load_config(Setting)
+    data = request.json or {}
+    data['qrData'] = _printer_qr_url(data)
+    payload, text = printer.build_receipt(cfg, data)
+    res = printer.send(cfg, payload)
+    AuditEvent.log("Receipt print %s: %s" % (data.get("ticketNo", ""),
+                   "ok" if res.get("ok") else "failed"), area='Payments')
+    return jsonify({"status": "ok" if res.get("ok") else "error",
+                    "message": res.get("message"), "preview": text,
+                    "qr": printer.qr_datauri(printer.qr_payload('receipt', data))})
+
+
+@app.route('/api/printer/cut', methods=['POST'])
+@login_required
+def api_printer_cut():
+    cfg = printer.load_config(Setting)
+    res = printer.send(cfg, printer.CUT_PARTIAL)
+    return jsonify({"status": "ok" if res.get("ok") else "error", "message": res.get("message")})
+
 
 
 if __name__ == '__main__':

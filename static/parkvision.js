@@ -147,13 +147,15 @@ function switchView(name) {
                                                                         b.dataset.view === name));
   // Labels match the WeParking sidebar from VAY Parking Management.pdf.
   const titleMap = {
-    dashboard: 'Home Page',          reports: 'Statistical Management',
+    dashboard: 'Home Page',          solutions: 'Parking Solutions',
+    printer: 'Printer & Ticketing',
+    reports: 'Statistical Management',
     video: 'Video Monitoring',       'parking-records': 'Parking Records',
     'scanning-record': 'Scanning Record', devices: 'Lane Monitoring',
     exit: 'Manual Exit Record',      orders: 'Order Management',
     'manual-entry': 'Manual Entry',
     admin: 'Whitelist',              registered: 'Registered Vehicle',
-    blacklist: 'Black List',         yard: 'Yard Management',
+    blacklist: 'Black List',         yard: 'Parking Facility',
     region: 'Region Management',     entry: 'Entry', tariffs: 'Tariffs',
     membership: 'Monthly Membership', 'type-mgmt': 'Type Management',
     visitors: 'Visitor Management',  equipment: 'Equipment Management',
@@ -1155,7 +1157,7 @@ async function refreshAccessEvents() {
     _rptRows.access = filtered;
     rptUpdatePaginator('access');
     if (!filtered.length) {
-      tb.innerHTML = `<tr><td colspan="11" style="text-align:center; opacity:0.6; padding:20px;">No access events match the filters.</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="12" style="text-align:center; opacity:0.6; padding:20px;">No access events match the filters.</td></tr>`;
       return;
     }
     const pageRows = rptPageSlice('access');
@@ -1208,8 +1210,18 @@ async function refreshAccessEvents() {
         ? `data-live-dur="1" data-entry-at="${tx.entryAt || 0}" data-exit-at="${tx.exitAt || 0}"`
         : '';
       const durStr   = tx ? dur(tx.entryAt, tx.exitAt) : '—';
+      // UHF capture photos (attached server-side in /api/logs by joining
+      // access_logs with uhf_entry_events on tag + timestamp ±30s).
+      const photoCell = (full, plate) => {
+        if (!full && !plate) return '<span style="opacity:0.4;">—</span>';
+        const t = (fn, lbl) => fn
+          ? `<a href="/image/${encodeURIComponent(fn)}" target="_blank" rel="noopener" title="${lbl}"><img src="/image/${encodeURIComponent(fn)}" alt="${lbl}" style="width:48px; height:32px; object-fit:cover; border-radius:4px; border:1px solid var(--line); display:block;"></a>`
+          : '';
+        return `<div style="display:flex; gap:4px;">${t(full, 'Vehicle')}${t(plate, 'Plate')}</div>`;
+      };
       return `
       <tr>
+        <td>${photoCell(l.full_image, l.plate_image)}</td>
         <td style="font-size: 0.85em; opacity: 0.85;">${l.timestamp || '—'}</td>
         <td style="font-family: monospace;">${(l.number_plate && l.number_plate !== 'N/A') ? l.number_plate : '—'}</td>
         <td style="font-family: monospace; font-size: 0.82em;">${(l.rfid_tag && l.rfid_tag !== 'N/A') ? l.rfid_tag : '—'}</td>
@@ -1226,7 +1238,7 @@ async function refreshAccessEvents() {
       </tr>`;
     }).join('');
   } catch (err) {
-    tb.innerHTML = `<tr><td colspan="8" style="text-align:center; color: #b74a42; padding:20px;">Failed to load access events: ${err.message}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="12" style="text-align:center; color: #b74a42; padding:20px;">Failed to load access events: ${err.message}</td></tr>`;
   }
 }
 
@@ -2239,6 +2251,7 @@ async function loadRegisteredVehicles() {
       return `<tr>
         <td>${_esc(e.owner_name) || '—'}</td>
         <td style="font-family:monospace;">${plate}</td>
+        <td style="font-family:monospace; font-size:0.88em;">${_esc(e.barcode) || '—'}</td>
         <td style="font-family:monospace; font-size:0.88em;">${_esc(e.rfid_tag) || '—'}</td>
         <td>${_esc(e.vehicle_type) || '—'}</td>
         <td>${_esc(e.department) || '—'}</td>
@@ -2247,14 +2260,14 @@ async function loadRegisteredVehicles() {
         <td>${badge}</td>
         <td><button class="ghost-button" data-qr data-qr-kind="member" data-qr-id="${e.id}"
             data-qr-title="Member Pass — ${_esc(e.owner_name) || ''}"
-            data-qr-meta="<b>${_esc(e.owner_name) || '—'}</b><br>Plate: ${plate}<br>Tag: ${_esc(e.rfid_tag) || '—'}<br>Dept: ${_esc(e.department) || '—'}<br>Valid until: ${_esc(e.valid_until) || '—'}"
+            data-qr-meta="<b>${_esc(e.owner_name) || '—'}</b><br>Plate: ${plate}<br>Barcode: ${_esc(e.barcode) || '—'}<br>UHF: ${_esc(e.rfid_tag) || '—'}<br>Dept: ${_esc(e.department) || '—'}<br>Valid until: ${_esc(e.valid_until) || '—'}"
             style="padding:4px 10px; font-size:0.8em; margin-right:4px;">QR</button><button class="ghost-button" data-wa data-wa-kind="m" data-wa-id="${e.id}"
             data-wa-phone="${_esc((e.contact_number||'').replace(/\\D/g,''))}"
             data-wa-name="${_esc(e.owner_name) || ''}"
             style="padding:4px 10px; font-size:0.8em; background:#25d366; color:#fff; border-color:#1ea152;">WhatsApp</button></td>
       </tr>`;
-    }, 9);
-  } catch (e) { tb.innerHTML = _emptyRow(9, 'Failed to load.'); }
+    }, 10);
+  } catch (e) { tb.innerHTML = _emptyRow(10, 'Failed to load.'); }
 }
 
 async function loadBlacklistView() {
@@ -2268,12 +2281,13 @@ async function loadBlacklistView() {
     if ($('bl-meta')) $('bl-meta').textContent = `${rows.length} banned entr${rows.length === 1 ? 'y' : 'ies'}`;
     paginate('bl', rows, 'bl-body', b => `<tr>
       <td style="font-family:monospace;">${_esc(b.number_plate) || '—'}</td>
+      <td style="font-family:monospace; font-size:0.88em;">${_esc(b.barcode) || '—'}</td>
       <td style="font-family:monospace; font-size:0.88em;">${_esc(b.rfid_tag) || '—'}</td>
       <td>${_esc(b.reason) || '—'}</td>
       <td>${_esc(b.added_by) || '—'}</td>
       <td>${_esc(b.created_at) || '—'}</td>
-    </tr>`, 5);
-  } catch (e) { tb.innerHTML = _emptyRow(5, 'Failed to load.'); }
+    </tr>`, 6);
+  } catch (e) { tb.innerHTML = _emptyRow(6, 'Failed to load.'); }
 }
 
 // Wire loaders: load when the section is opened, on search input, and on refresh.
@@ -3441,6 +3455,131 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
 });
 $('mn-search')?.addEventListener('input', loadMenuPerms);
 $('rp-search')?.addEventListener('input', loadRolePerms);
+
+// ── Permission Matrix (roles x sections, click-to-toggle) ────────────────
+// Renders a grid: each role is a row, each sidebar section is a column.
+// Every cell has 3 checkboxes (R/W/D). Click any checkbox and the change
+// POSTs immediately to /api/role_permissions — no save button.
+// Sections are derived DYNAMICALLY from the sidebar nav — never hardcoded — so
+// every section (including Solutions, Printer & Ticketing and anything added
+// later) is automatically governed by the permission matrix and appears in
+// Menu Management. Administrator bypasses all filtering (applyMenuPermissions).
+function _pmSections() {
+  var seen = {}, out = [];
+  document.querySelectorAll('.nav-item[data-view]').forEach(function (btn) {
+    var key = btn.dataset.view;
+    if (!key || seen[key]) return;
+    seen[key] = 1;
+    var label = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    out.push([key, label || key]);
+  });
+  return out;
+}
+const _PM_ACTIONS = ['read','write','delete'];
+
+// Rebuild the Menu-Management <select> from the live sidebar, so every section
+// is selectable there without hand-editing the template. Preserves the current
+// choice if still present. Runs once the DOM is ready.
+function _populateMenuOptions() {
+  var sel = document.getElementById('mn-menu');
+  if (!sel) return;
+  var prev = sel.value;
+  var opts = ['<option value="">— Select menu —</option>'];
+  _pmSections().forEach(function (s) {
+    opts.push('<option value="' + s[0] + '">' + _esc(s[1]) + '</option>');
+  });
+  sel.innerHTML = opts.join('');
+  if (prev) sel.value = prev;
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _populateMenuOptions);
+else _populateMenuOptions();
+
+async function loadPermissionMatrix() {
+  const head = $('pm-matrix-head'); const body = $('pm-matrix-body');
+  if (!head || !body) return;
+  const _SECTIONS = _pmSections();
+  try {
+    // Grab roles + existing permissions in parallel
+    const [roles, perms] = await Promise.all([
+      fetch('/api/roles',            { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/role_permissions', { cache: 'no-store' }).then(r => r.json()),
+    ]);
+    if (!Array.isArray(roles) || !Array.isArray(perms)) {
+      body.innerHTML = '<tr><td>Failed to load roles/permissions.</td></tr>';
+      return;
+    }
+    // Index existing perms by role|section|action -> {id, allowed}
+    const idx = {};
+    perms.forEach(p => {
+      const k = `${(p.role_name||'').toLowerCase()}|${p.section_key||''}|${p.action||''}`;
+      idx[k] = p;
+    });
+
+    // Build header row
+    let h = '<tr><th class="pm-role-th">Role</th>';
+    _SECTIONS.forEach(([k, label]) => {
+      h += `<th class="pm-section-th" title="${k}">${label}<div class="pm-rwd">R W D</div></th>`;
+    });
+    h += '</tr>';
+    head.innerHTML = h;
+
+    // Build body rows
+    body.innerHTML = roles.map(r => {
+      const cells = _SECTIONS.map(([k]) => {
+        const cbs = _PM_ACTIONS.map(a => {
+          const existing = idx[`${r.name.toLowerCase()}|${k}|${a}`];
+          const checked = existing && existing.allowed ? 'checked' : '';
+          return `<input type="checkbox" class="pm-cb"
+                    data-role="${_esc(r.name)}" data-section="${k}" data-action="${a}"
+                    ${checked}>`;
+        }).join('');
+        return `<td class="pm-cell">${cbs}</td>`;
+      }).join('');
+      return `<tr><td class="pm-role-cell">${_esc(r.name)}</td>${cells}</tr>`;
+    }).join('') || '<tr><td colspan="99">No roles yet -- add one in Role Management first.</td></tr>';
+
+  } catch (e) {
+    body.innerHTML = `<tr><td>Error: ${_esc(e.message)}</td></tr>`;
+  }
+}
+
+// Delegated click-to-toggle. Fires POST /api/role_permissions on every change.
+document.addEventListener('change', async (ev) => {
+  const cb = ev.target;
+  if (!cb || !cb.classList || !cb.classList.contains('pm-cb')) return;
+  const payload = {
+    role_name:   cb.dataset.role,
+    section_key: cb.dataset.section,
+    action:      cb.dataset.action,
+    allowed:     cb.checked ? 1 : 0,
+  };
+  cb.disabled = true;
+  try {
+    const res = await fetch('/api/role_permissions', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    alert(`Failed to save: ${e.message}`);
+    cb.checked = !cb.checked;   // revert on failure
+  } finally {
+    cb.disabled = false;
+  }
+});
+
+$('pm-refresh')?.addEventListener('click', loadPermissionMatrix);
+// Refresh matrix when role-perm view is opened, alongside the existing row list.
+Object.assign(_liveLoaders, {
+  'role-perm': () => { loadRolePerms(); loadPermissionMatrix(); }
+});
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  const v = btn.dataset.view || btn.dataset.jump;
+  if (v === 'role-perm') btn.addEventListener('click',
+      () => setTimeout(loadPermissionMatrix, 30));
+});
+
 // Pick up the new tables in Refresh/Export/Batch button injections.
 _injectTableActions();
 _injectBatchButtons();
@@ -3502,12 +3641,25 @@ async function loadUhfCaptures() {
       (e.owner_name || '').toUpperCase().includes(q));
     if ($('uc-meta')) $('uc-meta').textContent =
       `${rows.length} capture(s) — newest first`;
+    // loading="lazy" + decoding="async" means the browser only fetches images
+    // as they scroll into view. Without this, opening the UHF Captures page
+    // fetches ALL thumbnails at once (80 requests for 40 rows) and blocks the
+    // page for ~10 s. With lazy loading, only the ~6 visible rows fetch on
+    // page load — everything else defers until scroll.
+    //
+    // onerror swaps the broken image for a "no image" placeholder card so
+    // mobile viewers don't see a broken-image icon (which looks awful and
+    // still eats a tap). Uses the row-level plate/tag as fallback context.
     const thumb = (filename, label) => filename
-      ? `<a href="/image/${encodeURIComponent(filename)}" target="_blank" rel="noopener" title="${label} — click to view full">
+      ? `<a href="/image/${encodeURIComponent(filename)}" target="_blank" rel="noopener"
+           title="${label} — tap to view full"
+           class="uhf-thumb-link">
            <img src="/image/${encodeURIComponent(filename)}" alt="${label}"
-                style="width:96px; height:60px; object-fit:cover; border-radius:6px; border:1px solid var(--line); display:block;">
+                loading="lazy" decoding="async"
+                class="uhf-thumb-img"
+                onerror="this.onerror=null; this.parentElement.classList.add('uhf-thumb-missing'); this.parentElement.setAttribute('href','#'); this.style.display='none'; this.parentElement.innerHTML='&#128247;<br><span style=&quot;font-size:0.72em;&quot;>image<br>syncing</span>';">
          </a>`
-      : '<span style="opacity:0.45;">—</span>';
+      : '<span class="uhf-thumb-empty">—</span>';
     const badge = (st) => /grant/i.test(st || '') ? `<span class="scan-status-badge granted">${_esc(st)}</span>`
       : /den/i.test(st || '') ? `<span class="scan-status-badge denied">${_esc(st)}</span>`
       : `<span class="scan-status-badge scanning">${_esc(st) || '—'}</span>`;
@@ -3534,6 +3686,290 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
   }
 });
 $('uc-search')?.addEventListener('input', loadUhfCaptures);
+
+// Cleanup button — deletes duplicate rows whose image files 404 on this server.
+// Keeps rows that still have a working sibling; blanks out filenames for
+// orphan rows so the placeholder text stops showing.
+$('uc-cleanup-btn')?.addEventListener('click', async () => {
+  const btn = $('uc-cleanup-btn'); if (!btn) return;
+  if (!confirm('Scan UHF Captures for rows whose image files are missing on this server, and clean them up? Non-destructive: rows with a working duplicate get merged; orphans keep the scan record but the broken thumbnail disappears.')) return;
+  const originalText = btn.textContent;
+  btn.textContent = 'Cleaning...';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/uhf_captures/cleanup', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    alert(`Cleanup complete.\n\nScanned:  ${data.scanned}\nDropped duplicates: ${data.dropped_duplicates}\nOrphans blanked: ${data.nulled_orphans}`);
+    loadUhfCaptures();
+  } catch (e) {
+    alert('Cleanup failed: ' + e.message);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+});
+
+// ── Watermark address input (webportal-side editor for GATE_ADDRESS_LINE) ──
+// Reads /api/settings/gate_address on view-open; POSTs the same URL on Save
+// or Clear. Backend caches the value and refreshes it every 15 s from the
+// settings table, so the next UHF capture uses the new text within seconds.
+async function loadWatermarkAddress() {
+  const input = $('wm-addr-input');
+  const status = $('wm-addr-status');
+  if (!input) return;
+  try {
+    const r = await fetch('/api/settings/gate_address', {cache: 'no-store'});
+    const d = await r.json();
+    input.value = d.value || '';
+    if (status) {
+      status.textContent = (d.value)
+        ? `Current: "${d.value}"  (source: ${d.source})`
+        : 'No address set — watermark shows date/time only.';
+    }
+  } catch (e) {
+    if (status) status.textContent = 'Could not load current address: ' + e.message;
+  }
+}
+
+async function saveWatermarkAddress(newValue) {
+  const status = $('wm-addr-status');
+  const saveBtn = $('wm-addr-save');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+  try {
+    const r = await fetch('/api/settings/gate_address', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({value: newValue}),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    if (status) {
+      status.textContent = newValue
+        ? `Saved: "${d.value}"  — will appear on the next capture (within ~15 s).`
+        : 'Cleared — watermark now shows date/time only.';
+      status.style.color = '#16a34a';
+      setTimeout(() => { status.style.color = ''; loadWatermarkAddress(); }, 3000);
+    }
+  } catch (e) {
+    if (status) {
+      status.textContent = 'Save failed: ' + e.message;
+      status.style.color = '#dc2626';
+    }
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+  }
+}
+
+$('wm-addr-save')?.addEventListener('click', () => {
+  const input = $('wm-addr-input');
+  if (input) saveWatermarkAddress((input.value || '').trim());
+});
+$('wm-addr-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('wm-addr-save')?.click(); }
+});
+$('wm-addr-clear')?.addEventListener('click', () => {
+  const input = $('wm-addr-input');
+  if (input) { input.value = ''; saveWatermarkAddress(''); }
+});
+
+// Re-fetch the current value whenever the operator navigates to UHF Captures
+// so they always see the truth (in case someone else edited it on another tab).
+if (typeof _liveLoaders !== 'undefined') {
+  const _prevLoader = _liveLoaders['uhf-captures'];
+  _liveLoaders['uhf-captures'] = async () => {
+    if (_prevLoader) await _prevLoader();
+    loadWatermarkAddress();
+  };
+}
+
+
+// ── Zone-wise Gate Entry — live per-zone occupancy + recent entries ────────
+async function loadZoneLive() {
+  const grid = $('zl-grid'); const meta = $('zl-meta');
+  if (!grid) return;
+  try {
+    const r = await fetch('/api/zones', { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    let zones = await r.json();
+    const q = ($('zl-search')?.value || '').trim().toLowerCase();
+    if (q) {
+      zones = zones.filter(z =>
+        z.zone.toLowerCase().includes(q) ||
+        (z.region || '').toLowerCase().includes(q) ||
+        (z.recent || []).some(e => (e.vehicle || '').toLowerCase().includes(q)));
+    }
+    if (meta) {
+      const totalOcc = zones.reduce((s, z) => s + (z.occupied || 0), 0);
+      const totalCap = zones.reduce((s, z) => s + (z.capacity || 0), 0);
+      const totalEnt = zones.reduce((s, z) => s + (z.entries_last_hour || 0), 0);
+      meta.textContent =
+        `${zones.length} zones · ${totalOcc}/${totalCap || '∞'} parked · ${totalEnt} entries in the last hour`;
+    }
+    if (!zones.length) {
+      grid.innerHTML = `<div style="padding:40px; text-align:center; opacity:0.6;">No zones match.</div>`;
+      return;
+    }
+    grid.innerHTML = zones.map(z => {
+      const cap = z.capacity || 0;
+      const full = cap > 0 && z.available === 0;
+      const tight = !full && cap > 0 && z.available <= 5;
+      const pillClass = full ? 'full' : (tight ? 'warn' : 'ok');
+      const pillText  = cap > 0 ? `${z.available} / ${cap}` : `${z.occupied} parked`;
+      const cardCls   = full ? 'zone-card is-full' : (tight ? 'zone-card is-tight' : 'zone-card');
+      const recent = (z.recent || []).slice(0, 8);
+      return `
+        <div class="${cardCls}">
+          <div class="zone-card-head">
+            <div>
+              <h3>${z.zone}</h3>
+              ${z.region ? `<div class="region">${z.region}</div>` : ''}
+            </div>
+            <span class="zone-pill ${pillClass}">${pillText}</span>
+          </div>
+          <div class="zone-stats">
+            <div class="zone-stat"><div class="lbl">Occupied</div><div class="val">${z.occupied}</div></div>
+            <div class="zone-stat"><div class="lbl">Entries/hr</div><div class="val">${z.entries_last_hour || 0}</div></div>
+            <div class="zone-stat"><div class="lbl">Exits/hr</div><div class="val">${z.exits_last_hour || 0}</div></div>
+          </div>
+          <div class="zone-recent">
+            ${recent.length === 0
+              ? '<div style="opacity:0.6; padding:6px 0;">No gate entries in the last hour.</div>'
+              : recent.map(e => `
+                  <div class="zone-recent-row">
+                    <div>
+                      <span class="plate">${e.vehicle || '—'}</span>
+                      <span style="opacity:0.6; margin-left:6px;">${e.vehicle_type || ''}</span>
+                    </div>
+                    <div style="text-align:right;">
+                      <span class="scan-status-badge ${e.still_parked ? 'granted' : 'scanning'}">${e.still_parked ? 'IN' : 'OUT'}</span>
+                      <div class="time">${(e.entry_at || '').slice(11, 19)}</div>
+                    </div>
+                  </div>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+  } catch (err) {
+    grid.innerHTML = `<div style="padding:40px; text-align:center; color:#b74a42;">Failed to load: ${err.message}</div>`;
+  }
+}
+_liveLoaders['zone-live'] = loadZoneLive;
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'zone-live') {
+    btn.addEventListener('click', () => setTimeout(loadZoneLive, 30));
+  }
+});
+$('zl-search')?.addEventListener('input', loadZoneLive);
+$('zl-refresh')?.addEventListener('click', loadZoneLive);
+
+// ── Driver Users (VayAccess mobile) — admin-side live management ───────────
+async function loadDriverUsers() {
+  const tb = $('du-body'); const meta = $('du-meta');
+  if (!tb) return;
+  try {
+    const q = ($('du-search')?.value || '').trim();
+    const r = await fetch('/api/admin/drivers' + (q ? `?q=${encodeURIComponent(q)}` : ''),
+                         { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const rows = await r.json();
+    if (meta) {
+      const live = rows.filter(u => u.active).length;
+      const unread = rows.reduce((s, u) => s + (u.unread || 0), 0);
+      meta.textContent = `${rows.length} users · ${live} currently parked · ${unread} unread alerts across all`;
+    }
+    if (!rows.length) {
+      tb.innerHTML = `<tr><td colspan="10" style="text-align:center; opacity:0.6; padding:20px;">No mobile users registered yet.</td></tr>`;
+      return;
+    }
+    tb.innerHTML = rows.map(u => `
+      <tr data-driver="${u.id}">
+        <td><b>${u.name || '—'}</b></td>
+        <td style="font-size:0.85em;">${u.email || '—'}</td>
+        <td style="font-family:monospace; font-size:0.85em;">${u.phone || '—'}</td>
+        <td style="font-family:monospace;">${u.primary_plate || '—'}</td>
+        <td>${u.primary_type || 'Car'}</td>
+        <td>${u.active
+          ? '<span class="scan-status-badge granted">PARKED</span>'
+          : '<span style="opacity:0.5;">—</span>'}</td>
+        <td>${u.unread > 0
+          ? `<span class="scan-status-badge denied">${u.unread}</span>`
+          : '<span style="opacity:0.5;">0</span>'}</td>
+        <td>${u.reservation_count || 0}</td>
+        <td style="font-size:0.82em; opacity:0.85;">${u.last_seen || '—'}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-sm" data-du-notify="${u.id}" title="Send a push alert to this user">Send Alert</button>
+          <button class="btn-sm" data-du-edit="${u.id}" title="Edit profile">Edit</button>
+          <button class="btn-sm" data-du-logout="${u.id}" title="Revoke every active mobile session">Force Logout</button>
+          <button class="btn-sm danger" data-du-delete="${u.id}" title="Delete account + all reservations">Delete</button>
+        </td>
+      </tr>`).join('');
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#b74a42; padding:20px;">Failed to load: ${err.message}</td></tr>`;
+  }
+}
+_liveLoaders['driver-users'] = loadDriverUsers;
+document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
+  if ((btn.dataset.view || btn.dataset.jump) === 'driver-users') {
+    btn.addEventListener('click', () => setTimeout(loadDriverUsers, 30));
+  }
+});
+$('du-search')?.addEventListener('input', loadDriverUsers);
+$('du-refresh')?.addEventListener('click', loadDriverUsers);
+
+// Delegated action handlers for the Driver Users row buttons.
+document.addEventListener('click', async (ev) => {
+  const t = ev.target;
+  if (!t || !t.dataset) return;
+  const id = t.dataset.duNotify || t.dataset.duLogout || t.dataset.duDelete || t.dataset.duEdit;
+  if (!id) return;
+  try {
+    if (t.dataset.duNotify) {
+      const title = prompt('Alert title:'); if (!title) return;
+      const body  = prompt('Alert message (optional):') || '';
+      const r = await fetch(`/api/admin/drivers/${id}/notify`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, body, kind: 'system' }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+      alert('Alert sent — it will surface on the user\'s phone within ~5 seconds.');
+      loadDriverUsers();
+    } else if (t.dataset.duLogout) {
+      if (!confirm('Revoke every active mobile session for this user?')) return;
+      const r = await fetch(`/api/admin/drivers/${id}/logout_all`, { method: 'POST' });
+      if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+      const j = await r.json();
+      alert(`Revoked ${j.revoked} session(s).`);
+      loadDriverUsers();
+    } else if (t.dataset.duDelete) {
+      if (!confirm('Delete this driver account and ALL their reservations? This cannot be undone.')) return;
+      const r = await fetch(`/api/admin/drivers/${id}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+      loadDriverUsers();
+    } else if (t.dataset.duEdit) {
+      const row = t.closest('tr');
+      const cur = {
+        name: row.children[0].innerText.trim(),
+        phone: row.children[2].innerText.trim().replace(/^—$/, ''),
+        primary_plate: row.children[3].innerText.trim().replace(/^—$/, ''),
+        primary_type: row.children[4].innerText.trim(),
+      };
+      const name  = prompt('Name:',  cur.name)  ?? cur.name;
+      const phone = prompt('Phone:', cur.phone) ?? cur.phone;
+      const plate = prompt('Primary Plate:', cur.primary_plate) ?? cur.primary_plate;
+      const type  = prompt('Vehicle Type (Car / Bike):', cur.primary_type || 'Car') ?? cur.primary_type;
+      const pwd   = prompt('Reset password (leave blank to keep current):') || '';
+      const r = await fetch(`/api/admin/drivers/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone, primary_plate: plate, primary_type: type, password: pwd }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+      loadDriverUsers();
+    }
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  }
+});
+
 _injectTableActions();
 
 // ── Bulk CSV import (Visitors + Members) ────────────────────────────────────
@@ -3834,3 +4270,532 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 });
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Solutions page — the four verticals, live & configurable.
+   A site (yard) is tagged as one of four verticals and carries capability
+   flags. This module renders each site with LIVE occupancy (from /api/yards,
+   which computes it from current parking transactions) and its active
+   capabilities, and lets an admin create/configure/delete a site. Capability
+   chips deep-link into the real existing modules, so it is genuinely
+   end-to-end, not a mock. Self-contained IIFE — no globals re-declared.
+─────────────────────────────────────────────────────────────────────────── */
+(function () {
+  var VERTS = [
+    ['Gated Community',  '🏘️', 'sol-card-purple'],
+    ['Shopping Mall',    '🛍️', 'sol-card-blue'],
+    ['Corporate Campus', '🏢', 'sol-card-cyan'],
+    ['Street Parking',   '🅿️', 'sol-card-orange']
+  ];
+  var VMETA = {};
+  VERTS.forEach(function (v) { VMETA[v[0]] = { emoji: v[1], cls: v[2] }; });
+
+  // key, label, and the existing view a chip deep-links to
+  var CAPS = [
+    ['anpr',     'ANPR',             'video'],
+    ['rfid',     'RFID/UHF',         'uhf-captures'],
+    ['qr',       'QR Code',          'visitors'],
+    ['barrier',  'Boom Barriers',    'equipment'],
+    ['guidance', 'Parking Guidance', 'zone-live'],
+    ['payments', 'Payments',         'orders'],
+    ['visitor',  'Visitor Mgmt',     'visitors'],
+    ['access',   'Access Control',   'role-perm']
+  ];
+
+  // Default capability set per vertical, straight from the solution spec.
+  var PRESETS = {
+    'Gated Community':  { anpr: 1, rfid: 1, qr: 1, barrier: 1, guidance: 1, payments: 0, visitor: 1, access: 1 },
+    'Shopping Mall':    { anpr: 1, rfid: 1, qr: 1, barrier: 1, guidance: 1, payments: 1, visitor: 0, access: 0 },
+    'Corporate Campus': { anpr: 1, rfid: 1, qr: 0, barrier: 1, guidance: 0, payments: 0, visitor: 1, access: 1 },
+    'Street Parking':   { anpr: 1, rfid: 0, qr: 1, barrier: 0, guidance: 0, payments: 1, visitor: 0, access: 0 }
+  };
+
+  var solGet = function (id) { return document.getElementById(id); };
+  function solEsc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
+    });
+  }
+  function solToast(msg) {
+    if (typeof toast === 'function') { toast(msg); return; }
+    var t = solGet('toast'); if (!t) return;
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(solToast._t); solToast._t = setTimeout(function () { t.classList.remove('show'); }, 2600);
+  }
+
+  var solSites = [];
+  var solFilter = 'all';
+  var solPollTimer = null;
+
+  function solActive() {
+    var v = solGet('solutions');
+    return v && v.classList.contains('active');
+  }
+
+  function solFetch() {
+    return fetch('/api/yards', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) { return Array.isArray(rows) ? rows : []; })
+      .catch(function () { return []; });
+  }
+
+  function solRender() {
+    solFetch().then(function (rows) {
+      solSites = rows;
+      solPaintSummary();
+      solPaintFilter();
+      solPaintGrid();
+    });
+  }
+
+  function solPaintSummary() {
+    var el = solGet('sol-summary'); if (!el) return;
+    var cap = 0, occ = 0;
+    solSites.forEach(function (s) { cap += (s.capacity || 0); occ += (s.occupied || 0); });
+    var pct = cap ? Math.round((occ / cap) * 100) : 0;
+    var configured = solSites.filter(function (s) { return s.site_type; }).length;
+    el.innerHTML =
+      solStat(solSites.length, 'Sites', configured + ' configured') +
+      solStat(occ + ' / ' + cap, 'Live occupancy', pct + '% full') +
+      solStat(Math.max(0, cap - occ), 'Available now', 'across all sites') +
+      solStat(VERTS.length, 'Verticals', 'one platform');
+  }
+  function solStat(v, label, sub) {
+    return '<div class="sol-stat"><div class="sol-stat-v">' + solEsc(v) + '</div>' +
+      '<div class="sol-stat-l">' + solEsc(label) + '</div>' +
+      '<div class="sol-stat-s">' + solEsc(sub) + '</div></div>';
+  }
+
+  function solPaintFilter() {
+    var el = solGet('sol-vfilter'); if (!el) return;
+    var parts = ['<button class="sol-chip' + (solFilter === 'all' ? ' on' : '') + '" data-vf="all">All sites</button>'];
+    VERTS.forEach(function (v) {
+      var n = solSites.filter(function (s) { return s.site_type === v[0]; }).length;
+      parts.push('<button class="sol-chip' + (solFilter === v[0] ? ' on' : '') + '" data-vf="' +
+        solEsc(v[0]) + '">' + v[1] + ' ' + solEsc(v[0]) + ' (' + n + ')</button>');
+    });
+    el.innerHTML = parts.join('');
+    el.querySelectorAll('[data-vf]').forEach(function (b) {
+      b.addEventListener('click', function () { solFilter = b.dataset.vf; solPaintFilter(); solPaintGrid(); });
+    });
+  }
+
+  function solPaintGrid() {
+    var el = solGet('sol-grid'); if (!el) return;
+    var list = solSites.filter(function (s) { return solFilter === 'all' || s.site_type === solFilter; });
+    if (!list.length) {
+      el.innerHTML = '<div class="sol-empty">No sites yet. Use <b>+ Configure a Site</b> to add one and pick its vertical.</div>';
+      return;
+    }
+    el.innerHTML = list.map(solCard).join('');
+    el.querySelectorAll('[data-edit]').forEach(function (b) {
+      b.addEventListener('click', function () { solOpen(b.dataset.edit); });
+    });
+    el.querySelectorAll('[data-del]').forEach(function (b) {
+      b.addEventListener('click', function () { solDelete(b.dataset.del, b.dataset.name); });
+    });
+    el.querySelectorAll('[data-go]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (typeof switchView === 'function') switchView(b.dataset.go);
+        if (typeof scrollMainToTop === 'function') scrollMainToTop();
+      });
+    });
+  }
+
+  function solCard(s) {
+    var meta = VMETA[s.site_type] || { emoji: '📍', cls: 'sol-card-plain' };
+    var cap = s.capacity || 0, occ = s.occupied || 0;
+    var pct = cap ? Math.min(100, Math.round((occ / cap) * 100)) : 0;
+    var caps = s.caps || {};
+    var chips = CAPS.map(function (c) {
+      var on = !!caps[c[0]];
+      return '<button class="sol-cap-chip' + (on ? ' on' : '') + '" ' +
+        (on ? 'data-go="' + c[2] + '" title="Open ' + solEsc(c[1]) + '"' : 'disabled title="Not enabled"') +
+        '>' + solEsc(c[1]) + '</button>';
+    }).join('');
+    return '<article class="sol-card ' + meta.cls + '">' +
+      '<div class="sol-card-head"><span class="sol-emoji">' + meta.emoji + '</span>' +
+        '<div class="sol-card-titles"><h3>' + solEsc(s.name) + '</h3>' +
+        '<span class="sol-card-vert">' + solEsc(s.site_type || 'Unconfigured') + '</span></div></div>' +
+      '<div class="sol-occ"><div class="sol-occ-nums"><b>' + occ + '</b> / ' + cap +
+        ' <span>(' + Math.max(0, cap - occ) + ' free)</span></div>' +
+        '<div class="sol-occ-bar"><i style="width:' + pct + '%"></i></div></div>' +
+      (s.region || s.location ? '<div class="sol-card-loc">' + solEsc([s.region, s.location].filter(Boolean).join(' · ')) + '</div>' : '') +
+      '<div class="sol-card-caps">' + chips + '</div>' +
+      '<div class="sol-card-acts"><button class="sol-btn sol-btn-sm" data-edit="' + s.id + '">Configure</button>' +
+        '<button class="sol-btn sol-btn-sm sol-btn-danger" data-del="' + s.id + '" data-name="' + solEsc(s.name) + '">Delete</button></div>' +
+      '</article>';
+  }
+
+  // ── modal ────────────────────────────────────────────────────────────────
+  function solPaintCapChecks(preset) {
+    var box = solGet('sol-f-caps'); if (!box) return;
+    box.innerHTML = CAPS.map(function (c) {
+      var on = preset && preset[c[0]];
+      return '<label class="sol-capchk"><input type="checkbox" data-cap="' + c[0] + '"' +
+        (on ? ' checked' : '') + '><span>' + solEsc(c[1]) + '</span></label>';
+    }).join('');
+  }
+
+  function solOpen(id) {
+    var site = id ? solSites.filter(function (s) { return String(s.id) === String(id); })[0] : null;
+    solGet('sol-modal-title').textContent = site ? 'Configure Site' : 'Add a Site';
+    solGet('sol-f-id').value = site ? site.id : '';
+    solGet('sol-f-name').value = site ? (site.name || '') : '';
+    solGet('sol-f-type').value = site ? (site.site_type || '') : '';
+    solGet('sol-f-capacity').value = site ? (site.capacity || '') : '';
+    solGet('sol-f-region').value = site ? (site.region || '') : '';
+    solGet('sol-f-location').value = site ? (site.location || '') : '';
+    solPaintCapChecks(site ? site.caps : null);
+    var err = solGet('sol-modal-err'); err.hidden = true; err.textContent = '';
+    solGet('sol-modal').hidden = false;
+  }
+  function solClose() { solGet('sol-modal').hidden = true; }
+
+  function solReadCaps() {
+    var caps = {};
+    document.querySelectorAll('#sol-f-caps [data-cap]').forEach(function (cb) {
+      caps[cb.dataset.cap] = cb.checked;
+    });
+    return caps;
+  }
+
+  function solSave() {
+    var id = solGet('sol-f-id').value;
+    var name = solGet('sol-f-name').value.trim();
+    var type = solGet('sol-f-type').value;
+    var err = solGet('sol-modal-err');
+    if (!name) { err.textContent = 'Site name is required.'; err.hidden = false; return; }
+    if (!type) { err.textContent = 'Please pick a vertical.'; err.hidden = false; return; }
+    var payload = {
+      name: name, site_type: type,
+      capacity: parseInt(solGet('sol-f-capacity').value, 10) || 0,
+      region: solGet('sol-f-region').value.trim(),
+      location: solGet('sol-f-location').value.trim(),
+      caps: solReadCaps()
+    };
+    var url = id ? '/api/yards/' + id : '/api/yards';
+    var method = id ? 'PUT' : 'POST';
+    solGet('sol-save').disabled = true;
+    fetch(url, {
+      method: method, credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        solGet('sol-save').disabled = false;
+        if (!res.ok || (res.d && res.d.status === 'error')) {
+          err.textContent = (res.d && res.d.message) || 'Could not save the site.'; err.hidden = false; return;
+        }
+        solClose();
+        solToast(id ? 'Site updated.' : 'Site configured.');
+        solRender();
+      }).catch(function () {
+        solGet('sol-save').disabled = false;
+        err.textContent = 'Network error while saving.'; err.hidden = false;
+      });
+  }
+
+  function solDelete(id, name) {
+    if (!window.confirm('Delete site "' + name + '"? This removes the site configuration.')) return;
+    fetch('/api/yards/' + id, { method: 'DELETE', credentials: 'same-origin' })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function () { solToast('Site deleted.'); solRender(); })
+      .catch(function () { solToast('Could not delete the site.'); });
+  }
+
+  // ── wiring ─────────────────────────────────────────────────────────────────
+  function solWire() {
+    var add = solGet('sol-add-btn');
+    if (add && !add._wired) { add._wired = 1; add.addEventListener('click', function () { solOpen(null); }); }
+    var close = solGet('sol-modal-close'), cancel = solGet('sol-cancel'), save = solGet('sol-save');
+    if (close && !close._wired) { close._wired = 1; close.addEventListener('click', solClose); }
+    if (cancel && !cancel._wired) { cancel._wired = 1; cancel.addEventListener('click', solClose); }
+    if (save && !save._wired) { save._wired = 1; save.addEventListener('click', solSave); }
+    var type = solGet('sol-f-type');
+    if (type && !type._wired) {
+      type._wired = 1;
+      type.addEventListener('change', function () {
+        // Re-preset capabilities when a vertical is chosen for a NEW site,
+        // or when the admin switches an existing site's vertical.
+        var preset = PRESETS[type.value] || null;
+        if (preset) solPaintCapChecks(preset);
+      });
+    }
+    var back = solGet('sol-modal');
+    if (back && !back._wired) {
+      back._wired = 1;
+      back.addEventListener('click', function (e) { if (e.target === back) solClose(); });
+    }
+  }
+
+  // Init — runs immediately (this script loads at end of <body>, so the nav +
+  // modal DOM already exist) and again on DOMContentLoaded as a fallback. All
+  // wiring is idempotent (guarded by _wired flags), so double-calls are safe.
+  function solInit() {
+    solWire();
+    var btn = document.querySelector('.nav-item[data-view="solutions"]');
+    if (btn && !btn._solwired) {
+      btn._solwired = 1;
+      btn.addEventListener('click', function () { solWire(); solRender(); });
+    }
+    if (!solInit._poll) {
+      // real-time occupancy: refresh every 15s while the page is open + no modal.
+      solInit._poll = setInterval(function () {
+        var m = solGet('sol-modal');
+        if (solActive() && (!m || m.hidden)) solRender();
+      }, 15000);
+    }
+    if (solActive()) solRender();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', solInit);
+  else solInit();
+
+  // Belt-and-suspenders: also render when the app's own switchView lands on the
+  // Solutions view (covers deep-links and any nav path that bypasses the click).
+  if (typeof switchView === 'function') {
+    var _solOrigSwitch = switchView;
+    switchView = function (n) {
+      _solOrigSwitch(n);
+      if (n === 'solutions') { solWire(); solRender(); }
+    };
+  }
+})();
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Printer & Ticketing console. Talks to the /api/printer/* endpoints
+   (config/status/preview/test/print-ticket/print-receipt). The preview is
+   rendered server-side by the SAME builder the printer receives, so what you
+   see is what prints. Self-contained IIFE; no globals re-declared.
+─────────────────────────────────────────────────────────────────────────── */
+(function () {
+  var g = function (id) { return document.getElementById(id); };
+  var prnDoc = 'ticket';
+  var prnCfgLoaded = false;
+
+  function prnMsg(text, kind) {
+    var m = g('prn-msg'); if (!m) return;
+    m.textContent = text; m.hidden = false;
+    m.className = 'prn-msg' + (kind === 'error' ? ' prn-msg-err' : ' prn-msg-ok');
+    clearTimeout(prnMsg._t); prnMsg._t = setTimeout(function () { m.hidden = true; }, 4000);
+  }
+
+  function prnActive() { var v = g('printer'); return v && v.classList.contains('active'); }
+
+  function prnLoadConfig() {
+    return fetch('/api/printer/config', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (c) {
+        if (!c) return;
+        g('prn-enabled').checked = c.printer_enabled === '1' || c.printer_enabled === true;
+        g('prn-conn').value = c.printer_conn || 'lan';
+        g('prn-host').value = c.printer_host || '';
+        g('prn-port').value = c.printer_port || '9100';
+        g('prn-usb-name').value = c.printer_usb_name || '';
+        g('prn-width').value = c.printer_width || '80';
+        g('prn-lane').value = c.printer_lane || '';
+        if (g('prn-baseurl')) g('prn-baseurl').value = c.public_base_url || '';
+        g('prn-org').value = c.printer_org || '';
+        g('prn-footer').value = c.printer_footer || '';
+        g('prn-logo').checked = c.printer_logo === '1' || c.printer_logo === true;
+        g('prn-qr').checked = c.printer_qr === '1' || c.printer_qr === true;
+        g('prn-autocut').checked = c.printer_autocut === '1' || c.printer_autocut === true;
+        g('prn-auto-ticket').checked = c.printer_auto_ticket === '1' || c.printer_auto_ticket === true;
+        g('prn-auto-receipt').checked = c.printer_auto_receipt === '1' || c.printer_auto_receipt === true;
+        prnToggleConn();
+        prnLogoImg();
+        prnCfgLoaded = true;
+      }).catch(function () {});
+  }
+
+  // Show/hide the logo image in the white paper preview to mirror the toggle.
+  function prnLogoImg() {
+    var img = g('prn-paper-logo');
+    if (img) img.hidden = !g('prn-logo').checked;
+  }
+
+  // Render the bound QR image (data URI from the server) on the paper preview.
+  function prnSetQr(uri) {
+    var img = g('prn-paper-qr');
+    if (!img) return;
+    if (uri && g('prn-qr').checked) { img.src = uri; img.hidden = false; }
+    else { img.hidden = true; img.removeAttribute('src'); }
+  }
+
+  // Lay the paper out as: ticket body → QR image (at the "[ QR CODE ]" spot) →
+  // remainder (Scan at Exit + footer). Splits the server preview text on the
+  // placeholder line so the QR sits inline where it prints, not at the bottom.
+  function prnRenderPreview(text, qr) {
+    var top = g('prn-preview'), bot = g('prn-preview-bot');
+    text = text || '';
+    var showQr = !!qr && g('prn-qr').checked;
+    var parts = text.split(/[ \t]*\[ ?QR ?CODE ?\][ \t]*\r?\n?/i);
+    if (showQr && parts.length >= 2) {
+      top.textContent = parts[0].replace(/\s+$/, '');
+      bot.textContent = parts.slice(1).join('').replace(/^\r?\n/, '');
+      bot.hidden = false;
+    } else {
+      top.textContent = text;
+      bot.textContent = '';
+      bot.hidden = true;
+    }
+    prnSetQr(qr);
+  }
+
+  function prnToggleConn() {
+    var lan = g('prn-conn').value !== 'usb';
+    var lanB = document.querySelector('.prn-lan'), usbB = document.querySelector('.prn-usb');
+    if (lanB) lanB.hidden = !lan;
+    if (usbB) usbB.hidden = lan;
+  }
+
+  function prnGather() {
+    return {
+      printer_enabled: g('prn-enabled').checked ? '1' : '0',
+      printer_conn: g('prn-conn').value,
+      printer_host: g('prn-host').value.trim(),
+      printer_port: g('prn-port').value.trim() || '9100',
+      printer_usb_name: g('prn-usb-name').value.trim(),
+      printer_width: g('prn-width').value,
+      printer_lane: g('prn-lane').value.trim(),
+      public_base_url: g('prn-baseurl') ? g('prn-baseurl').value.trim() : '',
+      printer_org: g('prn-org').value.trim(),
+      printer_footer: g('prn-footer').value,
+      printer_logo: g('prn-logo').checked ? '1' : '0',
+      printer_qr: g('prn-qr').checked ? '1' : '0',
+      printer_autocut: g('prn-autocut').checked ? '1' : '0',
+      printer_auto_ticket: g('prn-auto-ticket').checked ? '1' : '0',
+      printer_auto_receipt: g('prn-auto-receipt').checked ? '1' : '0'
+    };
+  }
+
+  function prnSave() {
+    g('prn-save').disabled = true;
+    fetch('/api/printer/config', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prnGather())
+    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        g('prn-save').disabled = false;
+        if (!res.ok) { prnMsg((res.d && res.d.message) || 'Save failed (admin only).', 'error'); return; }
+        prnMsg('Settings saved.', 'ok'); prnStatus(); prnPreview();
+      }).catch(function () { g('prn-save').disabled = false; prnMsg('Network error.', 'error'); });
+  }
+
+  function prnStatus() {
+    var dot = document.querySelector('#prn-status .prn-dot');
+    var txt = g('prn-status-text');
+    fetch('/api/printer/status', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (txt) txt.textContent = (s.transport || '') + ' · ' + (s.message || '');
+        if (dot) dot.className = 'prn-dot ' + (s.online ? 'on' : 'off');
+      }).catch(function () { if (txt) txt.textContent = 'status unavailable'; });
+  }
+
+  function prnData() {
+    if (prnDoc === 'receipt') {
+      return {
+        ticketNo: g('pr-ticket').value, vehicleNo: g('pr-vehicle').value,
+        entryTime: g('pr-entry').value, exitTime: g('pr-exit').value,
+        duration: g('pr-duration').value, total: g('pr-total').value,
+        fee: g('pr-total').value, discount: 0, payment: g('pr-payment').value,
+        qrData: g('pr-ticket').value
+      };
+    }
+    var now = new Date();
+    return {
+      ticketNo: g('pt-ticket').value, vehicleNo: g('pt-vehicle').value,
+      vehicleType: g('pt-type').value, entryTime: g('pt-entry').value,
+      date: now.toLocaleDateString('en-GB'),
+      time: now.toLocaleTimeString('en-GB'),
+      qrData: g('pt-ticket').value
+    };
+  }
+
+  function prnPreview() {
+    var pre = g('prn-preview'); if (!pre) return;
+    fetch('/api/printer/preview', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: prnDoc, data: prnData() })
+    }).then(function (r) { return r.json(); })
+      .then(function (d) { prnRenderPreview(d.preview || '(no preview)', d.qr); })
+      .catch(function () { pre.textContent = '(preview unavailable)'; });
+  }
+
+  function prnPrint() {
+    var url = prnDoc === 'receipt' ? '/api/printer/print-receipt' : '/api/printer/print-ticket';
+    g('prn-print').disabled = true;
+    fetch(url, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prnData())
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        g('prn-print').disabled = false;
+        if (d.preview) prnRenderPreview(d.preview, d.qr); else prnSetQr(d.qr);
+        prnMsg(d.message || (d.status === 'ok' ? 'Sent to printer.' : 'Print failed.'),
+          d.status === 'ok' ? 'ok' : 'error');
+      }).catch(function () { g('prn-print').disabled = false; prnMsg('Network error.', 'error'); });
+  }
+
+  function prnTest() {
+    g('prn-test').disabled = true;
+    fetch('/api/printer/test', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        g('prn-test').disabled = false;
+        if (d.preview) prnRenderPreview(d.preview, d.qr); else prnSetQr(d.qr);
+        prnMsg(d.message || 'Test sent.', d.status === 'ok' ? 'ok' : 'error');
+      }).catch(function () { g('prn-test').disabled = false; prnMsg('Network error.', 'error'); });
+  }
+
+  function prnSwitchDoc(doc) {
+    prnDoc = doc;
+    document.querySelectorAll('.prn-tab').forEach(function (t) { t.classList.toggle('on', t.dataset.doc === doc); });
+    var st = g('prn-sample-ticket'), sr = g('prn-sample-receipt');
+    if (st) st.hidden = doc !== 'ticket';
+    if (sr) sr.hidden = doc !== 'receipt';
+    prnPreview();
+  }
+
+  function prnWire() {
+    var save = g('prn-save'); if (save && !save._w) { save._w = 1; save.addEventListener('click', prnSave); }
+    var test = g('prn-test'); if (test && !test._w) { test._w = 1; test.addEventListener('click', prnTest); }
+    var pr = g('prn-print'); if (pr && !pr._w) { pr._w = 1; pr.addEventListener('click', prnPrint); }
+    var conn = g('prn-conn'); if (conn && !conn._w) { conn._w = 1; conn.addEventListener('change', prnToggleConn); }
+    var logo = g('prn-logo'); if (logo && !logo._w) { logo._w = 1; logo.addEventListener('change', prnLogoImg); }
+    document.querySelectorAll('.prn-tab').forEach(function (t) {
+      if (!t._w) { t._w = 1; t.addEventListener('click', function () { prnSwitchDoc(t.dataset.doc); }); }
+    });
+    // live preview as sample fields change
+    ['pt-ticket','pt-vehicle','pt-type','pt-entry','pr-ticket','pr-vehicle','pr-entry','pr-exit','pr-duration','pr-total','pr-payment',
+     'prn-org','prn-footer','prn-width','prn-qr','prn-lane'].forEach(function (id) {
+      var el = g(id);
+      if (el && !el._w) { el._w = 1; el.addEventListener('input', function () { clearTimeout(prnWire._t); prnWire._t = setTimeout(prnPreview, 250); }); }
+    });
+  }
+
+  function prnEnter() {
+    prnWire();
+    (prnCfgLoaded ? Promise.resolve() : prnLoadConfig()).then(function () { prnStatus(); prnPreview(); });
+  }
+
+  function prnInit() {
+    var btn = document.querySelector('.nav-item[data-view="printer"]');
+    if (btn && !btn._prnw) { btn._prnw = 1; btn.addEventListener('click', prnEnter); }
+    if (!prnInit._poll) {
+      prnInit._poll = setInterval(function () { if (prnActive()) prnStatus(); }, 20000);
+    }
+    if (prnActive()) prnEnter();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', prnInit);
+  else prnInit();
+
+  if (typeof switchView === 'function') {
+    var _prnOrigSwitch = switchView;
+    switchView = function (n) { _prnOrigSwitch(n); if (n === 'printer') prnEnter(); };
+  }
+})();

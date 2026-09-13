@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260913-baseurl6">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -253,6 +253,8 @@
                Existing views are wired to their nearest section; brand-new sections
                (Video, Order, Yard, Region) are stubs pending their own backend. -->
           <button class="nav-item active" data-view="dashboard"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.2 12 3l9 7.2V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></span>Home Page</button>
+          <button class="nav-item" data-view="solutions"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>Solutions</button>
+          <button class="nav-item" data-view="printer"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/></svg></span>Printer &amp; Ticketing</button>
           <button class="nav-item" data-view="reports"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M6 20v-7M11 20V5M16 20v-9"/></svg></span>Statistical Management</button>
           <button class="nav-item" data-view="video"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4z"/></svg></span>Video Monitoring</button>
 
@@ -266,6 +268,7 @@
           </div>
 
           <button class="nav-item" data-view="devices"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21 7 3M20 21 17 3M12 3v3M12 10v3M12 17v3"/></svg></span>Lane Monitoring</button>
+          <button class="nav-item" data-view="zone-live"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg></span>Zone-wise Gate Entry</button>
           <button class="nav-item" data-view="exit"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span>Manual Exit Record</button>
           <button class="nav-item" data-view="manual-entry"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></span>Manual Entry</button>
           <button class="nav-item" data-view="orders"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2v20l2.5-1.5L10 22l2-1.5L14 22l2.5-1.5L19 22V2l-2.5 1.5L14 2l-2 1.5L10 2 7.5 3.5z"/><path d="M9 8h6M9 12h4"/></svg></span>Order Management</button>
@@ -280,7 +283,7 @@
 
           <button class="nav-item" data-view="registered"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l1.6-4.3A2 2 0 0 1 8.5 6.2h7a2 2 0 0 1 1.9 1.5L19 12M4 12h16v5h-2v-2H6v2H4z"/><circle cx="7.5" cy="15.5" r="1"/><circle cx="16.5" cy="15.5" r="1"/></svg></span>Registered Vehicle</button>
           <button class="nav-item" data-view="blacklist"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>Black List</button>
-          <button class="nav-item" data-view="yard"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17V7h3.5a3 3 0 0 1 0 6H9"/></svg></span>Yard Management</button>
+          <button class="nav-item" data-view="yard"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17V7h3.5a3 3 0 0 1 0 6H9"/></svg></span>Parking Facility</button>
 
           <!-- Region Management — expandable group -->
           <button class="nav-item nav-group" data-group="region-mgmt" aria-expanded="false">
@@ -307,6 +310,7 @@
             <button class="nav-item nav-child" data-view="dictionary"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v15a1 1 0 0 0 1 1h15M7 4h13v16H7a3 3 0 0 1 0-6h13"/></svg></span>Dictionary Managed</button>
             <button class="nav-item nav-child" data-view="audit-log"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit Log</button>
             <button class="nav-item nav-child" data-view="uhf-captures"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="14" rx="2"/><circle cx="10" cy="12" r="3"/><path d="M19 7v10M22 9v6"/></svg></span>UHF Captures</button>
+            <button class="nav-item nav-child" data-view="driver-users"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22a8 8 0 0 1 16 0"/><circle cx="11" cy="9" r="4"/><path d="M19 4l2 2M21 4l-2 2"/></svg></span>Driver Users (Mobile)</button>
           </div>
 
           <!-- System Settings — expandable group -->
@@ -354,6 +358,180 @@
         </header>
 
         <!-- ─── DASHBOARD ───────────────────────────────────────────────── -->
+        <section id="solutions" class="view">
+          <div class="sol-hero">
+            <div>
+              <h2 class="sol-hero-title">Parking Management Solutions</h2>
+              <p class="sol-hero-sub">Every site configured as one of four verticals &mdash; live occupancy and active capabilities, end&nbsp;to&nbsp;end.</p>
+            </div>
+            <button class="sol-btn sol-btn-primary" id="sol-add-btn" type="button">+ Configure a Site</button>
+          </div>
+
+          <div class="sol-summary" id="sol-summary"></div>
+          <div class="sol-vfilter" id="sol-vfilter"></div>
+          <div class="sol-grid" id="sol-grid"><div class="sol-loading">Loading sites&hellip;</div></div>
+
+          <div class="sol-platform">
+            <div class="sol-platform-head">
+              <span class="sol-emoji">🚀</span>
+              <div>
+                <h3>Single Integrated Platform</h3>
+                <p>One application for all parking operations.</p>
+              </div>
+            </div>
+            <div class="sol-caps" id="sol-platform-caps">
+              <span data-jump="video">ANPR</span>
+              <span data-jump="uhf-captures">RFID/UHF</span>
+              <span data-jump="visitors">QR Code</span>
+              <span data-jump="equipment">Boom Barriers</span>
+              <span data-jump="zone-live">Parking Guidance</span>
+              <span data-jump="orders">Payments</span>
+              <span data-jump="visitors">Visitor Management</span>
+              <span data-jump="role-perm">Access Control</span>
+              <span data-jump="dashboard">Centralized Dashboard</span>
+            </div>
+          </div>
+
+          <div class="sol-modal-backdrop" id="sol-modal" hidden>
+            <div class="sol-modal" role="dialog" aria-modal="true" aria-labelledby="sol-modal-title">
+              <div class="sol-modal-head">
+                <h3 id="sol-modal-title">Configure Site</h3>
+                <button class="sol-modal-x" id="sol-modal-close" type="button" aria-label="Close">&times;</button>
+              </div>
+              <div class="sol-modal-body">
+                <input type="hidden" id="sol-f-id">
+                <label class="sol-field"><span>Site name *</span>
+                  <input type="text" id="sol-f-name" placeholder="e.g. Prestige Green Meadows"></label>
+                <label class="sol-field"><span>Vertical *</span>
+                  <select id="sol-f-type">
+                    <option value="">Select a vertical&hellip;</option>
+                    <option value="Gated Community">🏘️ Gated Community</option>
+                    <option value="Shopping Mall">🛍️ Shopping Mall</option>
+                    <option value="Corporate Campus">🏢 Corporate Campus</option>
+                    <option value="Street Parking">🅿️ Street Parking</option>
+                  </select></label>
+                <div class="sol-field-row">
+                  <label class="sol-field"><span>Capacity</span>
+                    <input type="number" id="sol-f-capacity" min="0" placeholder="120"></label>
+                  <label class="sol-field"><span>Region</span>
+                    <input type="text" id="sol-f-region" placeholder="e.g. Bengaluru"></label>
+                </div>
+                <label class="sol-field"><span>Location</span>
+                  <input type="text" id="sol-f-location" placeholder="Address / landmark"></label>
+                <div class="sol-field"><span>Capabilities <small>(preset from the vertical &mdash; adjust as needed)</small></span>
+                  <div class="sol-capgrid" id="sol-f-caps"></div>
+                </div>
+                <div class="sol-modal-err" id="sol-modal-err" hidden></div>
+              </div>
+              <div class="sol-modal-foot">
+                <button class="sol-btn" id="sol-cancel" type="button">Cancel</button>
+                <button class="sol-btn sol-btn-primary" id="sol-save" type="button">Save Site</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="printer" class="view">
+          <div class="prn-top">
+            <div>
+              <h2 class="prn-title">Printer &amp; Ticketing</h2>
+              <p class="prn-sub">BUVVAS / ESC-POS entry tickets &amp; exit receipts over LAN or USB. Design, test and print &mdash; the preview mirrors exactly what the printer receives.</p>
+            </div>
+            <div class="prn-status" id="prn-status"><span class="prn-dot"></span><span id="prn-status-text">Checking&hellip;</span></div>
+          </div>
+
+          <div class="prn-cols">
+            <div class="prn-card">
+              <h3>Printer Configuration</h3>
+              <label class="prn-chk"><input type="checkbox" id="prn-enabled"><span>Enable printing</span></label>
+              <label class="prn-field"><span>Connection</span>
+                <select id="prn-conn">
+                  <option value="lan">LAN (Ethernet / Wi-Fi)</option>
+                  <option value="usb">USB (Windows)</option>
+                </select></label>
+              <div class="prn-lan">
+                <div class="prn-row">
+                  <label class="prn-field"><span>Printer IP / host</span>
+                    <input type="text" id="prn-host" placeholder="192.168.0.100"></label>
+                  <label class="prn-field prn-narrow"><span>Port</span>
+                    <input type="number" id="prn-port" placeholder="9100"></label>
+                </div>
+              </div>
+              <div class="prn-usb" hidden>
+                <label class="prn-field"><span>Windows printer name <small>(blank = default)</small></span>
+                  <input type="text" id="prn-usb-name" placeholder="BUVVAS HS-KH80"></label>
+              </div>
+              <div class="prn-row">
+                <label class="prn-field"><span>Paper width</span>
+                  <select id="prn-width"><option value="80">80 mm</option><option value="58">58 mm</option></select></label>
+                <label class="prn-field"><span>Lane / gate</span>
+                  <input type="text" id="prn-lane" placeholder="ENTRY-01"></label>
+              </div>
+              <label class="prn-field"><span>Scan / QR base URL <small>(phone-reachable host — LAN IP or public URL; blank = this server)</small></span>
+                <input type="text" id="prn-baseurl" placeholder="http://192.168.29.133:5005  or  https://vayaccess-cloud.onrender.com"></label>
+              <label class="prn-field"><span>Header (organisation)</span>
+                <input type="text" id="prn-org" placeholder="VAY ACCESS CONTROL SYSTEMS"></label>
+              <label class="prn-field"><span>Footer</span>
+                <textarea id="prn-footer" rows="2" placeholder="VAY Parking Management&#10;www.vayaccess.com"></textarea></label>
+              <div class="prn-toggles">
+                <label class="prn-chk"><input type="checkbox" id="prn-logo"><span>Print VAY logo</span></label>
+                <label class="prn-chk"><input type="checkbox" id="prn-qr"><span>Print QR code</span></label>
+                <label class="prn-chk"><input type="checkbox" id="prn-autocut"><span>Auto-cut after print</span></label>
+                <label class="prn-chk"><input type="checkbox" id="prn-auto-ticket"><span>Auto-print ticket on entry</span></label>
+                <label class="prn-chk"><input type="checkbox" id="prn-auto-receipt"><span>Auto-print receipt on exit</span></label>
+              </div>
+              <div class="prn-actions">
+                <button class="prn-btn prn-btn-primary" id="prn-save" type="button">Save Settings</button>
+                <button class="prn-btn" id="prn-test" type="button">Test Print</button>
+              </div>
+              <div class="prn-msg" id="prn-msg" hidden></div>
+            </div>
+
+            <div class="prn-card">
+              <h3>Live Preview &amp; Print</h3>
+              <div class="prn-tabs">
+                <button class="prn-tab on" data-doc="ticket" type="button">Entry Ticket</button>
+                <button class="prn-tab" data-doc="receipt" type="button">Exit Receipt</button>
+              </div>
+              <div class="prn-sample" id="prn-sample-ticket">
+                <div class="prn-row">
+                  <label class="prn-field"><span>Ticket No</span><input type="text" id="pt-ticket" value="VAY-00001258"></label>
+                  <label class="prn-field"><span>Vehicle</span><input type="text" id="pt-vehicle" value="TS09AB1234"></label>
+                </div>
+                <div class="prn-row">
+                  <label class="prn-field"><span>Type</span><input type="text" id="pt-type" value="CAR"></label>
+                  <label class="prn-field"><span>Entry time</span><input type="text" id="pt-entry" value="09:42 AM"></label>
+                </div>
+              </div>
+              <div class="prn-sample" id="prn-sample-receipt" hidden>
+                <div class="prn-row">
+                  <label class="prn-field"><span>Ticket No</span><input type="text" id="pr-ticket" value="VAY-00001258"></label>
+                  <label class="prn-field"><span>Vehicle</span><input type="text" id="pr-vehicle" value="TS09AB1234"></label>
+                </div>
+                <div class="prn-row">
+                  <label class="prn-field"><span>Entry</span><input type="text" id="pr-entry" value="09:42 AM"></label>
+                  <label class="prn-field"><span>Exit</span><input type="text" id="pr-exit" value="12:36 PM"></label>
+                </div>
+                <div class="prn-row">
+                  <label class="prn-field"><span>Duration</span><input type="text" id="pr-duration" value="02:54"></label>
+                  <label class="prn-field"><span>Total (₹)</span><input type="number" id="pr-total" value="80"></label>
+                </div>
+                <label class="prn-field"><span>Payment</span><input type="text" id="pr-payment" value="UPI"></label>
+              </div>
+              <div class="prn-paper" id="prn-paper">
+                <img class="prn-paper-logo" id="prn-paper-logo" src="{{ url_for('static', filename='assets/vay-logo.jpeg') }}" alt="VAY ACCESS">
+                <pre class="prn-preview" id="prn-preview">Loading preview&hellip;</pre>
+                <img class="prn-paper-qr" id="prn-paper-qr" alt="Ticket QR code" hidden>
+                <pre class="prn-preview" id="prn-preview-bot" hidden></pre>
+              </div>
+              <div class="prn-actions">
+                <button class="prn-btn prn-btn-primary" id="prn-print" type="button">Print This</button>
+                <span class="prn-hint">Preview updates live. Printing sends to the configured device.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section id="dashboard" class="view active">
           <!-- ── Home Page summary (PDF page 5): gradient cards + charts ───── -->
           <div class="home-summary">
@@ -1023,6 +1201,7 @@
               <table>
                 <thead>
                   <tr>
+                    <th>Photos</th>
                     <th>Scan Time</th>
                     <th>Plate</th>
                     <th>Tag (EPC)</th>
@@ -1037,7 +1216,7 @@
                   </tr>
                 </thead>
                 <tbody id="rpt-access-body">
-                  <tr><td colspan="11" style="text-align:center; opacity:0.6; padding:20px;">No access events match the filters.</td></tr>
+                  <tr><td colspan="12" style="text-align:center; opacity:0.6; padding:20px;">No access events match the filters.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1349,11 +1528,11 @@
             <div class="table-wrap">
               <table id="rv-table">
                 <thead>
-                  <tr><th>Owner</th><th>License Plate</th><th>Tag (EPC)</th><th>Type</th>
+                  <tr><th>Owner</th><th>License Plate</th><th>Barcode</th><th>UHF Tag (EPC)</th><th>Type</th>
                     <th>Department</th><th>Payment</th><th>Valid Until</th><th>Status</th><th>Action</th></tr>
                 </thead>
                 <tbody id="rv-body">
-                  <tr><td colspan="9" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                  <tr><td colspan="10" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1379,10 +1558,10 @@
             <div class="table-wrap">
               <table id="bl-table">
                 <thead>
-                  <tr><th>License Plate</th><th>Tag (EPC)</th><th>Reason</th><th>Added By</th><th>Added On</th></tr>
+                  <tr><th>License Plate</th><th>Barcode</th><th>UHF Tag (EPC)</th><th>Reason</th><th>Added By</th><th>Added On</th></tr>
                 </thead>
                 <tbody id="bl-body">
-                  <tr><td colspan="5" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
+                  <tr><td colspan="6" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1392,10 +1571,10 @@
         <!-- Yard Management — live CRUD from /api/yards -->
         <section id="yard" class="view">
           <section class="panel" style="margin-bottom:16px;">
-            <div class="panel-head"><h2>Add Parking Yard</h2></div>
+            <div class="panel-head"><h2>Add Parking Facility</h2></div>
             <form id="yard-form" autocomplete="off"
                   style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; align-items:end;">
-              <label>Yard Name *<input type="text" id="yard-name" required placeholder="Basement A"></label>
+              <label>Facility Name *<input type="text" id="yard-name" required placeholder="Basement A"></label>
               <label>Capacity *<input type="number" id="yard-capacity" required min="0" step="1" placeholder="120"></label>
               <label>Location<input type="text" id="yard-location" placeholder="Block A, Level -1"></label>
               <label>Region
@@ -1408,13 +1587,13 @@
           </section>
           <section class="panel">
             <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
-              <div><h2>Parking Yards</h2><span class="hint" id="yard-meta">Loading…</span></div>
+              <div><h2>Parking Facilities</h2><span class="hint" id="yard-meta">Loading…</span></div>
               <input type="text" id="yard-search" placeholder="Search yard / region…" style="margin:0; min-width:200px;">
             </div>
             <div class="table-wrap">
               <table id="yard-table">
                 <thead>
-                  <tr><th>Yard Name</th><th>Capacity</th><th>Occupied</th><th>Available</th>
+                  <tr><th>Facility Name</th><th>Capacity</th><th>Occupied</th><th>Available</th>
                     <th>Location</th><th>Region</th><th>Action</th></tr>
                 </thead>
                 <tbody id="yard-body">
@@ -1644,7 +1823,7 @@
                   <option value="membership">Member Management · Monthly</option>
                   <option value="registered">Registered Vehicle</option>
                   <option value="blacklist">Black List</option>
-                  <option value="yard">Yard Management</option>
+                  <option value="yard">Parking Facility</option>
                   <option value="region">Region Management</option>
                   <option value="type-mgmt">Type Management</option>
                   <option value="visitors">Visitor Management</option>
@@ -1704,8 +1883,29 @@
         </section>
         <!-- Role Permission — live CRUD from /api/role_permissions -->
         <section id="role-perm" class="view">
+          <!-- Permission Matrix: roles as rows, sections as columns. Click
+               a checkbox and it POSTs the toggle immediately -- no save
+               button required. Best-in-class UX for permission editing. -->
           <section class="panel" style="margin-bottom:16px;">
-            <div class="panel-head"><h2>Add Role Permission</h2></div>
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Permission Matrix</h2>
+                <span class="hint">Click any cell to toggle Read / Write / Delete. Saves instantly. Seeded with parking-specific role bundle on first boot; edit freely.</span>
+              </div>
+              <button type="button" id="pm-refresh" class="ghost-button" style="margin:0;">Refresh</button>
+            </div>
+            <div class="table-wrap" style="max-height: 70vh; overflow: auto;">
+              <table id="pm-matrix" class="pm-matrix-table">
+                <thead id="pm-matrix-head"></thead>
+                <tbody id="pm-matrix-body">
+                  <tr><td style="text-align:center; opacity:0.6; padding:20px;">Loading matrix…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel" style="margin-bottom:16px;">
+            <div class="panel-head"><h2>Add Role Permission (manual row)</h2></div>
             <form id="rp-form" autocomplete="off" style="display:grid; grid-template-columns: repeat(4,1fr); gap:12px; align-items:end;">
               <label>Role *<select id="rp-role"><option value="">— Select role —</option></select></label>
               <label>Section *<select id="rp-section" data-menu-options><option value="">— Select section —</option></select></label>
@@ -1763,6 +1963,26 @@
 
         <!-- UHF Captures — live from /api/uhf_captures (on-site only) -->
         <section id="uhf-captures" class="view">
+          <!-- Watermark address input: shown on every UHF capture below the timestamp -->
+          <section class="panel" style="margin-bottom:14px;">
+            <div class="panel-head">
+              <div>
+                <h2 style="margin:0;">Watermark address</h2>
+                <p class="hint" style="margin:2px 0 0;">Appears on every captured image below the date/time. Change it any time — takes effect within 15 seconds.</p>
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; padding:6px 0;">
+              <input type="text" id="wm-addr-input"
+                     placeholder="e.g. Reliance Hardware Depot, Kondapur, Hyderabad"
+                     maxlength="80"
+                     style="flex:1 1 320px; min-width:0;">
+              <button type="button" id="wm-addr-save" class="btn">Save</button>
+              <button type="button" id="wm-addr-clear" class="ghost-button"
+                      title="Removes the address line so the watermark shows date/time only.">Clear</button>
+            </div>
+            <p class="hint" id="wm-addr-status" style="margin:6px 0 0; min-height:1em;"></p>
+          </section>
+
           <section class="panel">
             <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
               <div>
@@ -1770,6 +1990,9 @@
                 <p class="hint" style="margin:2px 0 0;" id="uc-meta">Every time the UHF reader picks up a tag, the camera frame + plate crop are saved here.</p>
               </div>
               <input type="text" id="uc-search" placeholder="Search tag / plate / owner…" style="margin:0; min-width:220px;">
+              <button type="button" id="uc-cleanup-btn" class="ghost-button"
+                      title="Removes duplicate rows whose image files 404 on this server (legacy captures made before the on-site agent learned to send event_id)."
+                      style="margin:0;">Clean up broken images</button>
             </div>
             <div class="table-wrap">
               <table id="uc-table">
@@ -1778,6 +2001,51 @@
               </table>
             </div>
             <p class="hint" style="margin:14px 0 0;">Captures are saved on the on-site PC under <code>detections/</code> and persisted to the <code>uhf_entry_events</code> table. Click any thumbnail to view full-size.</p>
+          </section>
+        </section>
+
+        <!-- ─── Zone-wise Gate Entry — live across every yard ───────────────── -->
+        <section id="zone-live" class="view">
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Zone-wise Gate Entry — Live</h2>
+                <p class="hint" style="margin:2px 0 0;" id="zl-meta">Per-zone occupancy + every gate entry from the last hour. Refreshes every 5 seconds.</p>
+              </div>
+              <input type="text" id="zl-search" placeholder="Search zone or plate…" style="margin:0; min-width:220px;">
+              <button type="button" class="btn" id="zl-refresh">Refresh</button>
+            </div>
+            <div id="zl-grid" class="zone-live-grid">
+              <div style="padding:40px; text-align:center; opacity:0.6;">Loading…</div>
+            </div>
+          </section>
+        </section>
+
+        <!-- ─── Driver Users (Mobile app) — admin-side management ─────────── -->
+        <section id="driver-users" class="view">
+          <section class="panel">
+            <div class="panel-head" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <h2>Driver Users — VayAccess Mobile</h2>
+                <p class="hint" style="margin:2px 0 0;" id="du-meta">All self-registered mobile users. Actions here surface on the user's phone within ~5s.</p>
+              </div>
+              <input type="text" id="du-search" placeholder="Search name / email / phone / plate…" style="margin:0; min-width:240px;">
+              <button type="button" class="btn" id="du-refresh">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table id="du-table">
+                <thead><tr>
+                  <th>Name</th><th>Email</th><th>Phone</th><th>Primary Plate</th><th>Type</th>
+                  <th>Live</th><th>Unread</th><th>Reservations</th><th>Last Seen</th><th>Actions</th>
+                </tr></thead>
+                <tbody id="du-body"><tr><td colspan="10" style="text-align:center; opacity:0.6; padding:20px;">Loading…</td></tr></tbody>
+              </table>
+            </div>
+            <p class="hint" style="margin:14px 0 0;">
+              <b>Send Alert</b> pushes an in-app notification to a single user.
+              <b>Force Logout</b> revokes every active mobile session for that user.
+              <b>Delete</b> erases the account and all reservations.
+            </p>
           </section>
         </section>
 
@@ -2138,6 +2406,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260913-baseurl6"></script>
   </body>
 </html>
