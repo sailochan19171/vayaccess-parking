@@ -4467,6 +4467,15 @@ document.addEventListener('DOMContentLoaded', function () {
     var err = solGet('sol-modal-err');
     if (!name) { err.textContent = 'Site name is required.'; err.hidden = false; return; }
     if (!type) { err.textContent = 'Please pick a vertical.'; err.hidden = false; return; }
+    // "+ Configure a Site" with a name that already exists should reconfigure
+    // that site rather than dead-end as a duplicate. Match case-insensitively
+    // against the sites already loaded so the save becomes a PUT, not a POST.
+    if (!id) {
+      var match = solSites.filter(function (s) {
+        return (s.name || '').trim().toLowerCase() === name.toLowerCase();
+      })[0];
+      if (match) id = String(match.id);
+    }
     var payload = {
       name: name, site_type: type,
       capacity: parseInt(solGet('sol-f-capacity').value, 10) || 0,
