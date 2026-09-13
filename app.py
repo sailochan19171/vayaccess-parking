@@ -20,7 +20,7 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Account, Role, DictionaryEntry, LCDScreen, UHFEntryEvent,
                       MenuPermission, RolePermission, migrate_schema,
                       DriverUser, DriverSession, DriverReservation,
-                      DriverNotification, ImageBlob)
+                      DriverNotification, ImageBlob, PrintJob)
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -6498,6 +6498,45 @@ def _printer_qr_url(data):
     return _build_pass_url(_make_pass_token('t', int(digits) if digits else 0))
 
 
+def _record_print(kind, data, cfg, res):
+    """Store a full record of a print in print_jobs — what/who/where/outcome.
+    Never lets a logging error break the actual print."""
+    try:
+        conn = (cfg.get('printer_conn') or 'lan').lower()
+        target = (((cfg.get('printer_host') or '') + ':' + str(cfg.get('printer_port') or ''))
+                  if conn == 'lan' else (cfg.get('printer_usb_name') or 'USB (default)'))
+        amt = data.get('total', data.get('amount'))
+        try:
+            amt = int(amt) if amt not in (None, '') else None
+        except (TypeError, ValueError):
+            amt = None
+        db.session.add(PrintJob(
+            kind=kind,
+            ticket_no=(data.get('ticketNo') or None),
+            vehicle_number=(data.get('vehicleNo') or None),
+            vehicle_type=(data.get('vehicleType') or None),
+            amount=amt,
+            lane=(data.get('lane') or cfg.get('printer_lane') or None),
+            transport=conn,
+            target=target,
+            status=('sent' if res.get('ok') else 'failed'),
+            message=(res.get('message') or '')[:255],
+            qr_payload=(data.get('qrData') or None),
+            printed_by=session.get('user_name'),
+            printed_by_role=session.get('user_role'),
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+@app.route('/api/printer/jobs', methods=['GET'])
+@login_required
+def api_printer_jobs():
+    rows = PrintJob.query.order_by(PrintJob.created_at.desc()).limit(100).all()
+    return jsonify([r.to_dict() for r in rows])
+
+
 @app.route('/api/printer/preview', methods=['POST'])
 @login_required
 def api_printer_preview():
@@ -6527,6 +6566,7 @@ def api_printer_test():
     cfg = printer.load_config(Setting)
     payload, text = printer.build_test(cfg)
     res = printer.send(cfg, payload)
+    _record_print('test', {}, cfg, res)
     AuditEvent.log("Printer test print: %s" % ("ok" if res.get("ok") else "failed"), area='System')
     return jsonify({"status": "ok" if res.get("ok") else "error",
                     "message": res.get("message"), "preview": text})
@@ -6540,6 +6580,7 @@ def api_printer_print_ticket():
     data['qrData'] = _printer_qr_url(data)
     payload, text = printer.build_ticket(cfg, data)
     res = printer.send(cfg, payload)
+    _record_print('ticket', data, cfg, res)
     AuditEvent.log("Ticket print %s: %s" % (data.get("ticketNo", ""),
                    "ok" if res.get("ok") else "failed"), area='Gate')
     return jsonify({"status": "ok" if res.get("ok") else "error",
@@ -6555,6 +6596,7 @@ def api_printer_print_receipt():
     data['qrData'] = _printer_qr_url(data)
     payload, text = printer.build_receipt(cfg, data)
     res = printer.send(cfg, payload)
+    _record_print('receipt', data, cfg, res)
     AuditEvent.log("Receipt print %s: %s" % (data.get("ticketNo", ""),
                    "ok" if res.get("ok") else "failed"), area='Payments')
     return jsonify({"status": "ok" if res.get("ok") else "error",
@@ -6567,6 +6609,7 @@ def api_printer_print_receipt():
 def api_printer_cut():
     cfg = printer.load_config(Setting)
     res = printer.send(cfg, printer.CUT_PARTIAL)
+    _record_print('cut', {}, cfg, res)
     return jsonify({"status": "ok" if res.get("ok") else "error", "message": res.get("message")})
 
 

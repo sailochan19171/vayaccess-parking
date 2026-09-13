@@ -4694,6 +4694,31 @@ document.addEventListener('DOMContentLoaded', function () {
       }).catch(function () { if (txt) txt.textContent = 'status unavailable'; });
   }
 
+  function prnLoadJobs() {
+    var body = g('prn-jobs-body'); if (!body) return;
+    fetch('/api/printer/jobs', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) {
+        if (!Array.isArray(rows) || !rows.length) {
+          body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No prints yet.</td></tr>';
+          var m0 = g('prn-jobs-meta'); if (m0) m0.textContent = 'No prints yet.';
+          return;
+        }
+        body.innerHTML = rows.map(function (j) {
+          var col = j.status === 'sent' ? 'var(--ok)' : 'var(--danger)';
+          var st = '<span style="font-weight:700;color:' + col + '">' + _esc(j.status) + '</span>';
+          var amt = j.amount ? ('₹' + j.amount) : '—';
+          var dev = _esc(j.transport) + (j.target ? ' · ' + _esc(j.target) : '');
+          return '<tr><td>' + _esc(j.when) + '</td><td>' + _esc(j.kind) +
+            '</td><td>' + _esc(j.ticket_no || '—') + '</td><td>' + _esc(j.vehicle || '—') +
+            '</td><td>' + amt + '</td><td style="font-size:0.85em">' + dev +
+            '</td><td>' + _esc(j.printed_by) + ' <small style="color:var(--muted)">(' + _esc(j.role) + ')</small>' +
+            '</td><td>' + st + '</td></tr>';
+        }).join('');
+        var m = g('prn-jobs-meta'); if (m) m.textContent = rows.length + ' recent prints';
+      }).catch(function () {});
+  }
+
   function prnData() {
     if (prnDoc === 'receipt') {
       return {
@@ -4736,6 +4761,7 @@ document.addEventListener('DOMContentLoaded', function () {
       .then(function (d) {
         g('prn-print').disabled = false;
         if (d.preview) prnRenderPreview(d.preview, d.qr); else prnSetQr(d.qr);
+        prnLoadJobs();
         prnMsg(d.message || (d.status === 'ok' ? 'Sent to printer.' : 'Print failed.'),
           d.status === 'ok' ? 'ok' : 'error');
       }).catch(function () { g('prn-print').disabled = false; prnMsg('Network error.', 'error'); });
@@ -4748,6 +4774,7 @@ document.addEventListener('DOMContentLoaded', function () {
       .then(function (d) {
         g('prn-test').disabled = false;
         if (d.preview) prnRenderPreview(d.preview, d.qr); else prnSetQr(d.qr);
+        prnLoadJobs();
         prnMsg(d.message || 'Test sent.', d.status === 'ok' ? 'ok' : 'error');
       }).catch(function () { g('prn-test').disabled = false; prnMsg('Network error.', 'error'); });
   }
@@ -4781,6 +4808,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function prnEnter() {
     prnWire();
     (prnCfgLoaded ? Promise.resolve() : prnLoadConfig()).then(function () { prnStatus(); prnPreview(); });
+    prnLoadJobs();
   }
 
   function prnInit() {

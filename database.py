@@ -260,6 +260,47 @@ class ParkingTransaction(db.Model):
         }
 
 
+class PrintJob(db.Model):
+    """A full record of every ticket/receipt/test print — what was printed, to
+    which device, whether it succeeded, and WHO printed it (user + role). This
+    is the dynamic print history; the printer config itself lives in Setting.
+    A new table, so db.create_all() creates it on boot (no migration needed)."""
+    __tablename__ = 'print_jobs'
+    id              = db.Column(db.Integer, primary_key=True)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    kind            = db.Column(db.String(20),  nullable=False)   # ticket / receipt / test / cut
+    ticket_no       = db.Column(db.String(40),  nullable=True, index=True)
+    vehicle_number  = db.Column(db.String(50),  nullable=True, index=True)
+    vehicle_type    = db.Column(db.String(20),  nullable=True)
+    amount          = db.Column(db.Integer,     nullable=True)
+    lane            = db.Column(db.String(40),  nullable=True)
+    transport       = db.Column(db.String(10),  nullable=True)   # lan / usb
+    target          = db.Column(db.String(120), nullable=True)   # host:port or usb name
+    status          = db.Column(db.String(20),  nullable=False, default='sent')  # sent / failed
+    message         = db.Column(db.String(255), nullable=True)
+    qr_payload      = db.Column(db.String(200), nullable=True)
+    printed_by      = db.Column(db.String(120), nullable=True, index=True)
+    printed_by_role = db.Column(db.String(80),  nullable=True)
+
+    def to_dict(self):
+        return {
+            "id":         self.id,
+            "when":       to_ist(self.created_at, "%Y-%m-%d %H:%M:%S") or "",
+            "kind":       self.kind,
+            "ticket_no":  self.ticket_no or "",
+            "vehicle":    self.vehicle_number or "",
+            "type":       self.vehicle_type or "",
+            "amount":     self.amount or 0,
+            "lane":       self.lane or "",
+            "transport":  (self.transport or "").upper(),
+            "target":     self.target or "",
+            "status":     self.status or "",
+            "message":    self.message or "",
+            "printed_by": self.printed_by or "—",
+            "role":       self.printed_by_role or "—",
+        }
+
+
 class Setting(db.Model):
     """Simple key/value store for facility-wide knobs."""
     __tablename__ = 'settings'

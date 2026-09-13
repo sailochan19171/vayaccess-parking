@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260913-baseurl6">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260913-printlog7">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -528,6 +528,26 @@
                 <button class="prn-btn prn-btn-primary" id="prn-print" type="button">Print This</button>
                 <span class="prn-hint">Preview updates live. Printing sends to the configured device.</span>
               </div>
+            </div>
+          </div>
+
+          <div class="prn-card" style="margin-top:18px">
+            <div class="panel-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <h3 style="margin:0">Print History</h3>
+              <span class="prn-hint" id="prn-jobs-meta">Every ticket / receipt / test print — who, what, where, outcome.</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="prn-jobs-table">
+                <thead>
+                  <tr>
+                    <th>When</th><th>Type</th><th>Ticket</th><th>Vehicle</th>
+                    <th>Amount</th><th>Device</th><th>By (Role)</th><th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="prn-jobs-body">
+                  <tr><td colspan="8" style="text-align:center;color:var(--muted)">Loading print history…</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -2406,6 +2426,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260913-baseurl6"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260913-printlog7"></script>
   </body>
 </html>
