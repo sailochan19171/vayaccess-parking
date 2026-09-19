@@ -157,6 +157,26 @@ def migrate_schema(engine):
         ("cap_visitor",  "BOOLEAN"),
         ("cap_access",   "BOOLEAN"),
     ]
+    # Structured slot link + real-time lifecycle on driver reservations.
+    driver_reservations_new = [
+        ("slot_id",         "INTEGER"),
+        ("block_id",        "INTEGER"),
+        ("location_id",     "INTEGER"),
+        ("booking_code",    "VARCHAR(30)"),
+        ("state",           "VARCHAR(20)"),
+        ("held_until",      "TIMESTAMP"),
+        ("grace_until",     "TIMESTAMP"),
+        ("otp_verified_at", "TIMESTAMP"),
+        ("occupied_at",     "TIMESTAMP"),
+        ("exited_at",       "TIMESTAMP"),
+        ("completed_at",    "TIMESTAMP"),
+        ("cancelled_at",    "TIMESTAMP"),
+        ("qr_token",        "VARCHAR(80)"),
+    ]
+    # Idempotency key for notification fan-out.
+    driver_notifications_new = [
+        ("event_key", "VARCHAR(120)"),
+    ]
 
     def _existing_cols(conn, table):
         if dialect == 'sqlite':
@@ -174,7 +194,9 @@ def migrate_schema(engine):
                             ('access_logs', access_logs_new),
                             ('accounts',    accounts_new),
                             ('parking_transactions', parking_transactions_new),
-                            ('yards',       yards_new)):
+                            ('yards',       yards_new),
+                            ('driver_reservations',   driver_reservations_new),
+                            ('driver_notifications',  driver_notifications_new)):
             existing = _existing_cols(conn, table)
             # Skip tables that don't exist yet — db.create_all() (called right
             # after migrate_schema) will create them with the full column set,
@@ -738,7 +760,19 @@ class DriverSession(db.Model):
 
 
 class DriverReservation(db.Model):
-    """A pre-booked slot at a yard. status: pending → confirmed → consumed/cancelled."""
+    """A pre-booked slot at a yard.
+
+    Two status fields coexist for backward compatibility:
+      * ``status`` — the ORIGINAL coarse lifecycle (confirmed / consumed /
+        cancelled / expired) that the shipped mobile screens already read.
+      * ``state``  — the NEW fine-grained real-time lifecycle
+        (HELD → OTP_PENDING → RESERVED → OCCUPIED → EXIT_PENDING → COMPLETED,
+        plus CANCELLED / EXPIRED). All slot-locking logic drives ``state``;
+        ``status`` is kept in sync by app.py so old clients keep working.
+
+    The structured slot link (slot_id / block_id / location_id) is the new
+    Location→Block→Slot hierarchy; ``slot_label`` / ``yard_name`` remain
+    populated as denormalised display copies for the legacy screens."""
     __tablename__ = 'driver_reservations'
     id              = db.Column(db.Integer,    primary_key=True)
     driver_id       = db.Column(db.Integer,    db.ForeignKey('driver_users.id'), nullable=False, index=True)
@@ -754,17 +788,44 @@ class DriverReservation(db.Model):
     upi_id          = db.Column(db.String(120), nullable=True)
     transaction_id  = db.Column(db.String(40),  nullable=True)
     created_at      = db.Column(db.DateTime,    default=datetime.utcnow)
+    # ── Structured slot + real-time lifecycle (added 2026-09-19) ──────────────
+    # Rolled onto existing DBs by migrate_schema (driver_reservations_new).
+    slot_id         = db.Column(db.Integer,     nullable=True, index=True)   # -> parking_slots.id
+    block_id        = db.Column(db.Integer,     nullable=True)               # -> parking_blocks.id
+    location_id     = db.Column(db.Integer,     nullable=True, index=True)   # -> yards.id
+    booking_code    = db.Column(db.String(30),  nullable=True, index=True)   # PK-2026-000123
+    state           = db.Column(db.String(20),  nullable=False, default='RESERVED')  # see class docstring
+    held_until      = db.Column(db.DateTime,    nullable=True)   # HELD/OTP_PENDING auto-expire deadline
+    grace_until     = db.Column(db.DateTime,    nullable=True)   # RESERVED "must arrive by" deadline
+    otp_verified_at = db.Column(db.DateTime,    nullable=True)
+    occupied_at     = db.Column(db.DateTime,    nullable=True)
+    exited_at       = db.Column(db.DateTime,    nullable=True)
+    completed_at    = db.Column(db.DateTime,    nullable=True)
+    cancelled_at    = db.Column(db.DateTime,    nullable=True)
+    qr_token        = db.Column(db.String(80),  nullable=True)
+
+    # states that count as an ACTIVE hold on a slot (block re-booking)
+    ACTIVE_STATES = ('HELD', 'OTP_PENDING', 'RESERVED', 'OCCUPIED', 'EXIT_PENDING')
 
     def to_dict(self):
         return {
             "id":             self.id,
             "yard":           self.yard_name,
+            "location_id":    self.location_id,
+            "block_id":       self.block_id,
+            "slot_id":        self.slot_id,
             "vehicle_plate":  self.vehicle_plate,
             "vehicle_type":   self.vehicle_type,
             "slot_label":     self.slot_label or "",
+            "booking_code":   self.booking_code or "",
             "start_at":       to_ist(self.start_at, "%Y-%m-%d %H:%M") or "",
             "end_at":         to_ist(self.end_at, "%Y-%m-%d %H:%M") or "",
             "status":         self.status,
+            "state":          self.state or "",
+            "held_until":     to_ist(self.held_until, "%Y-%m-%d %H:%M:%S") or "",
+            "grace_until":    to_ist(self.grace_until, "%Y-%m-%d %H:%M:%S") or "",
+            "occupied_at":    to_ist(self.occupied_at, "%Y-%m-%d %H:%M") or "",
+            "exited_at":      to_ist(self.exited_at, "%Y-%m-%d %H:%M") or "",
             "amount":         self.amount or 0,
             "payment_method": self.payment_method or "",
             "transaction_id": self.transaction_id or "",
@@ -778,9 +839,13 @@ class DriverNotification(db.Model):
     driver_id  = db.Column(db.Integer, db.ForeignKey('driver_users.id'), nullable=False, index=True)
     title      = db.Column(db.String(160), nullable=False)
     body       = db.Column(db.String(800), nullable=True)
-    kind       = db.Column(db.String(40),  nullable=True)   # reservation / payment / alert / system
+    kind       = db.Column(db.String(40),  nullable=True)   # reservation / payment / alert / system / slot_available
     read_at    = db.Column(db.DateTime,    nullable=True)
     created_at = db.Column(db.DateTime,    default=datetime.utcnow, index=True)
+    # Idempotency key: <event>:<slot_id>:<driver_id>:<epoch-bucket>. A unique
+    # index on it means re-processing the same slot-available event can never
+    # create a duplicate notification for the same driver. (added 2026-09-19)
+    event_key  = db.Column(db.String(120), nullable=True, index=True)
 
     def to_dict(self):
         return {
@@ -790,6 +855,207 @@ class DriverNotification(db.Model):
             "kind":       self.kind or "system",
             "read":       self.read_at is not None,
             "created_at": to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
+        }
+
+
+# ── Real-time slot reservation domain (added 2026-09-19) ─────────────────────
+# Hierarchy: Yard (parking LOCATION) → ParkingBlock → ParkingSlot.
+# A slot's `status` is the SOURCE OF TRUTH for bookability; every transition is
+# an atomic conditional UPDATE in app.py so two users can never book one slot.
+# All these are NEW tables → db.create_all() creates them; no migrate needed.
+
+# Slot lifecycle statuses (the slot itself)
+SLOT_AVAILABLE      = 'AVAILABLE'      # green  — bookable
+SLOT_HELD           = 'HELD'           # yellow — one user holding (pre-OTP)
+SLOT_RESERVED       = 'RESERVED'       # red    — confirmed reservation
+SLOT_OCCUPIED       = 'OCCUPIED'       # red    — vehicle parked in it
+SLOT_DISABLED       = 'DISABLED'       # grey   — temporarily disabled by admin
+SLOT_OUT_OF_SERVICE = 'OUT_OF_SERVICE' # grey   — marked unavailable by admin
+SLOT_STATUSES = (SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
+                 SLOT_DISABLED, SLOT_OUT_OF_SERVICE)
+# Server-owned colour map so the palette is consistent and never hardcoded on
+# just the client. UI reads `color` straight from the slot dict.
+SLOT_STATUS_COLORS = {
+    SLOT_AVAILABLE: 'green', SLOT_HELD: 'yellow', SLOT_RESERVED: 'red',
+    SLOT_OCCUPIED: 'red', SLOT_DISABLED: 'grey', SLOT_OUT_OF_SERVICE: 'grey',
+}
+SLOT_STATUS_LABELS = {
+    SLOT_AVAILABLE: 'Available', SLOT_HELD: 'Held', SLOT_RESERVED: 'Reserved',
+    SLOT_OCCUPIED: 'Occupied', SLOT_DISABLED: 'Disabled',
+    SLOT_OUT_OF_SERVICE: 'Out of service',
+}
+
+
+class ParkingBlock(db.Model):
+    """A block/zone within a parking location (Yard). Holds N slots."""
+    __tablename__ = 'parking_blocks'
+    id            = db.Column(db.Integer, primary_key=True)
+    yard_id       = db.Column(db.Integer, db.ForeignKey('yards.id'), nullable=False, index=True)
+    name          = db.Column(db.String(80),  nullable=False)   # "Block A"
+    code          = db.Column(db.String(20),  nullable=True)    # "A" — slot-label prefix
+    description   = db.Column(db.String(255), nullable=True)
+    display_order = db.Column(db.Integer,     default=0)
+    is_active     = db.Column(db.Boolean,     default=True)
+    created_at    = db.Column(db.DateTime,    default=datetime.utcnow)
+
+    def counts(self):
+        """(total, available, occupied) live counts for this block."""
+        rows = ParkingSlot.query.filter(ParkingSlot.block_id == self.id).all()
+        total = len(rows)
+        avail = sum(1 for s in rows if s.status == SLOT_AVAILABLE)
+        occ   = sum(1 for s in rows if s.status in (SLOT_RESERVED, SLOT_OCCUPIED, SLOT_HELD))
+        return total, avail, occ
+
+    def to_dict(self, with_counts=True):
+        d = {
+            "id":            self.id,
+            "yard_id":       self.yard_id,
+            "name":          self.name,
+            "code":          self.code or "",
+            "description":   self.description or "",
+            "display_order": self.display_order or 0,
+            "is_active":     bool(self.is_active),
+            "created_at":    to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
+        }
+        if with_counts:
+            total, avail, occ = self.counts()
+            d.update(total_slots=total, available=avail, occupied=occ)
+        return d
+
+
+class ParkingSlot(db.Model):
+    """One parkable slot inside a block. `status` is the source of truth."""
+    __tablename__ = 'parking_slots'
+    id             = db.Column(db.Integer, primary_key=True)
+    block_id       = db.Column(db.Integer, db.ForeignKey('parking_blocks.id'), nullable=False, index=True)
+    yard_id        = db.Column(db.Integer, index=True)          # denormalised parent location
+    label          = db.Column(db.String(40),  nullable=False)  # "A5"
+    status         = db.Column(db.String(20),  nullable=False, default=SLOT_AVAILABLE, index=True)
+    slot_type      = db.Column(db.String(20),  nullable=True, default='standard')  # standard/ev/accessible/vip
+    display_order  = db.Column(db.Integer,     default=0)
+    # live-occupancy bookkeeping
+    held_by        = db.Column(db.Integer,     nullable=True)   # driver_id currently holding
+    held_until     = db.Column(db.DateTime,    nullable=True)   # hold auto-expiry
+    reservation_id = db.Column(db.Integer,     nullable=True)   # current active reservation
+    occupant_driver_id = db.Column(db.Integer, nullable=True)
+    occupant_plate = db.Column(db.String(50),  nullable=True)
+    version        = db.Column(db.Integer,     default=0)       # bumped on every transition
+    updated_at     = db.Column(db.DateTime,    default=datetime.utcnow)
+    created_at     = db.Column(db.DateTime,    default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('block_id', 'label', name='uq_slot_block_label'),)
+
+    @property
+    def color(self):
+        return SLOT_STATUS_COLORS.get(self.status, 'grey')
+
+    @property
+    def is_bookable(self):
+        return self.status == SLOT_AVAILABLE
+
+    def to_dict(self, public=True):
+        """public=True omits occupant identity (safe for the shared slot map /
+        realtime stream). public=False (admin) includes occupant + reservation."""
+        d = {
+            "id":            self.id,
+            "block_id":      self.block_id,
+            "yard_id":       self.yard_id,
+            "label":         self.label,
+            "status":        self.status,
+            "color":         self.color,
+            "status_label":  SLOT_STATUS_LABELS.get(self.status, self.status),
+            "slot_type":     self.slot_type or "standard",
+            "display_order": self.display_order or 0,
+            "bookable":      self.is_bookable,
+            "version":       self.version or 0,
+        }
+        if not public:
+            d.update(
+                held_by=self.held_by,
+                reservation_id=self.reservation_id,
+                occupant_driver_id=self.occupant_driver_id,
+                occupant_plate=self.occupant_plate or "",
+                held_until=to_ist(self.held_until, "%Y-%m-%d %H:%M:%S") or "",
+                updated_at=to_ist(self.updated_at, "%Y-%m-%d %H:%M:%S") or "",
+            )
+        return d
+
+
+class OtpVerification(db.Model):
+    """Server-side OTP challenge. The code itself is stored ONLY as a hash.
+    Enforces expiry, max attempts, resend limit and single-use (consumed_at)."""
+    __tablename__ = 'otp_verifications'
+    id             = db.Column(db.Integer, primary_key=True)
+    purpose        = db.Column(db.String(30),  nullable=False)  # reservation_confirm / exit / session_start
+    driver_id      = db.Column(db.Integer,     nullable=True, index=True)
+    reservation_id = db.Column(db.Integer,     nullable=True, index=True)
+    destination    = db.Column(db.String(120), nullable=True)   # masked phone/email shown to user
+    code_hash      = db.Column(db.String(255), nullable=False)  # never store the raw OTP
+    attempts       = db.Column(db.Integer,     default=0)
+    max_attempts   = db.Column(db.Integer,     default=5)
+    resend_count   = db.Column(db.Integer,     default=0)
+    expires_at     = db.Column(db.DateTime,    nullable=False)
+    consumed_at    = db.Column(db.DateTime,    nullable=True)   # set once verified — blocks reuse
+    created_at     = db.Column(db.DateTime,    default=datetime.utcnow, index=True)
+
+    def is_expired(self):
+        return datetime.utcnow() > self.expires_at
+
+    def to_dict(self):
+        # NEVER exposes code_hash.
+        return {
+            "id":            self.id,
+            "purpose":       self.purpose,
+            "reservation_id": self.reservation_id,
+            "destination":   self.destination or "",
+            "attempts":      self.attempts or 0,
+            "max_attempts":  self.max_attempts or 5,
+            "expires_at":    to_ist(self.expires_at, "%Y-%m-%d %H:%M:%S") or "",
+            "consumed":      self.consumed_at is not None,
+        }
+
+
+class SlotWatcher(db.Model):
+    """A driver's 'notify me when this slot frees up' subscription."""
+    __tablename__ = 'slot_watchers'
+    id          = db.Column(db.Integer, primary_key=True)
+    slot_id     = db.Column(db.Integer, db.ForeignKey('parking_slots.id'), nullable=False, index=True)
+    driver_id   = db.Column(db.Integer, nullable=False, index=True)
+    active      = db.Column(db.Boolean, default=True)
+    notified_at = db.Column(db.DateTime, nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('slot_id', 'driver_id', name='uq_watch_slot_driver'),)
+
+    def to_dict(self):
+        return {
+            "id":        self.id,
+            "slot_id":   self.slot_id,
+            "driver_id": self.driver_id,
+            "active":    bool(self.active),
+            "notified_at": to_ist(self.notified_at, "%Y-%m-%d %H:%M") or "",
+            "created_at":  to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
+        }
+
+
+class DeviceToken(db.Model):
+    """Push token (FCM/Expo/web) for a driver's device. Used to deliver push
+    notifications that survive app-kill. Populated by the mobile app once its
+    FCM integration ships; harmless (unused) until then."""
+    __tablename__ = 'device_tokens'
+    id         = db.Column(db.Integer, primary_key=True)
+    driver_id  = db.Column(db.Integer, nullable=False, index=True)
+    token      = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    platform   = db.Column(db.String(20),  nullable=True)   # android / ios / web
+    provider   = db.Column(db.String(20),  nullable=True, default='fcm')  # fcm / expo / webpush
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id":        self.id,
+            "driver_id": self.driver_id,
+            "platform":  self.platform or "",
+            "provider":  self.provider or "fcm",
+            "last_seen": to_ist(self.last_seen, "%Y-%m-%d %H:%M") or "",
         }
 
 

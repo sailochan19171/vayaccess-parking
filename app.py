@@ -20,7 +20,12 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       Account, Role, DictionaryEntry, LCDScreen, UHFEntryEvent,
                       MenuPermission, RolePermission, migrate_schema,
                       DriverUser, DriverSession, DriverReservation,
-                      DriverNotification, ImageBlob, PrintJob)
+                      DriverNotification, ImageBlob, PrintJob,
+                      ParkingBlock, ParkingSlot, OtpVerification, SlotWatcher,
+                      DeviceToken,
+                      SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
+                      SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
+import parking_core as park
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -5205,7 +5210,7 @@ def _verify_pass_token(token):
     if not _hmac.compare_digest(sig, expected):
         return None
     kind, rest = base[0], base[1:]
-    if kind not in ('v', 'm', 't'):     # v=visitor, m=member, t=parking ticket
+    if kind not in ('v', 'm', 't', 'r'):  # v=visitor, m=member, t=parking ticket, r=reservation
         return None
     try:
         return (kind, int(rest))
@@ -5449,6 +5454,27 @@ def pass_verify(token):
                            if inside else
                            ("Exited" + (f" · stayed {dur}" if dur else "") +
                             (f" · ₹{row.total_amount} {row.payment_method or ''}" if row.total_amount else ""))),
+        }
+    elif kind == 'r':      # parking slot reservation / booking pass
+        row = DriverReservation.query.get(row_id)
+        if not row:
+            ctx["error"] = "Reservation not found."
+            return render_template('pass_verify.html', **ctx), 404
+        active = (row.state or '').upper() in DriverReservation.ACTIVE_STATES
+        blk = ParkingBlock.query.get(row.block_id) if row.block_id else None
+        ctx["pass_"] = {
+            "type":       "Parking Reservation",
+            "name":       row.booking_code or ("PK-%06d" % row.id),
+            "plate":      row.vehicle_plate or "",
+            "subline":    (f"{row.yard_name or '—'} · "
+                           f"{(blk.name + ' · ') if blk else ''}Slot {row.slot_label or '—'}"),
+            "purpose":    (f"Amount: ₹{row.amount}" if row.amount else ""),
+            "valid_from": row.start_at.strftime("%Y-%m-%d %H:%M") if row.start_at else "—",
+            "valid_to":   row.end_at.strftime("%Y-%m-%d %H:%M") if row.end_at else "—",
+            "is_valid":   active,
+            "status":     (row.state or row.status or "").upper() or "UNKNOWN",
+            "sub":        (f"Reservation is {(row.state or row.status or '').lower()} — "
+                           + ("admit / allow parking" if active else "no longer active")),
         }
     else:   # 'm' = member
         row = Whitelist.query.get(row_id)
@@ -5846,6 +5872,515 @@ def _driver_auth_required(fn):
         request.driver = drv  # type: ignore[attr-defined]
         return fn(*a, **kw)
     return _w
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# REAL-TIME PARKING SLOT RESERVATION  (Location → Block → Slot)
+# Backend is the source of truth; every booking transition is atomic (see
+# parking_core). SSE (/api/events/slots) pushes changes live; the sweeper
+# thread (started in _boot) expires stale holds/reservations.
+# ═════════════════════════════════════════════════════════════════════════════
+_PARK_ERRORS = {
+    'slot_unavailable':   'This slot was just booked by another user. Please select another slot.',
+    'slot_state_changed': 'This slot just changed. Please refresh and try again.',
+    'no_otp':             'No active OTP. Please restart the booking.',
+    'expired':            'The OTP has expired. Please resend a new one.',
+    'too_many_attempts':  'Too many incorrect attempts. Please resend a new OTP.',
+    'resend_limit':       'OTP resend limit reached. Please start the booking over.',
+    'duplicate_label':    'A slot with that label already exists in this block.',
+    'slot_in_use':        'That slot is currently in use and cannot be changed.',
+}
+
+
+def _park_err(code, http=409):
+    if code.startswith('invalid:'):
+        left = code.split(':', 1)[1]
+        return jsonify({"error": "Incorrect OTP. %s attempt(s) left." % left, "code": "invalid"}), 400
+    return jsonify({"error": _PARK_ERRORS.get(code, code), "code": code}), http
+
+
+def _reservation_payload(r):
+    """to_dict() + a scannable QR token/URL for the booking pass."""
+    d = r.to_dict()
+    try:
+        tok = r.qr_token or _make_pass_token('r', r.id)
+        d['qr_token'] = tok
+        d['pass_url'] = _build_pass_url(tok)
+    except Exception:
+        pass
+    return d
+
+
+def _sse_format(event):
+    return "data: %s\n\n" % json.dumps(event)
+
+
+# ── Realtime stream (public: carries no occupant PII, only slot colour) ───────
+@app.route('/api/events/slots')
+def api_events_slots():
+    loc = request.args.get('location', type=int)
+
+    def _pred(ev):
+        return loc is None or ev.get('locationId') == loc
+
+    sid, q = park.broker.subscribe(_pred)
+
+    def _stream():
+        try:
+            yield "retry: 3000\n\n"
+            yield _sse_format({'event': 'hello', 'locationId': loc})
+            deadline = time.time() + 600  # cap a connection; EventSource reconnects
+            while time.time() < deadline:
+                try:
+                    yield _sse_format(q.get(timeout=15))
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            park.broker.unsubscribe(sid)
+
+    resp = Response(_stream(), mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['X-Accel-Buffering'] = 'no'   # disable proxy buffering (nginx/render)
+    resp.headers['Connection'] = 'keep-alive'
+    return resp
+
+
+# ── User: browse locations → blocks → slots ───────────────────────────────────
+@app.route('/api/park/locations')
+def api_park_locations():
+    """Locations that have at least one block configured (bookable)."""
+    out = []
+    for y in Yard.query.order_by(Yard.name).all():
+        blocks = ParkingBlock.query.filter_by(yard_id=y.id).count()
+        if blocks == 0:
+            continue
+        slots = ParkingSlot.query.filter_by(yard_id=y.id).all()
+        avail = sum(1 for s in slots if s.status == SLOT_AVAILABLE)
+        out.append({
+            "id": y.id, "name": y.name, "location": y.location or "",
+            "region": y.region or "", "site_type": y.site_type or "",
+            "blocks": blocks, "total_slots": len(slots), "available": avail,
+        })
+    return jsonify(out)
+
+
+@app.route('/api/park/locations/<int:yid>/blocks')
+def api_park_location_blocks(yid):
+    y = Yard.query.get(yid)
+    if not y:
+        return jsonify({"error": "location not found"}), 404
+    blocks = (ParkingBlock.query.filter_by(yard_id=yid)
+              .order_by(ParkingBlock.display_order, ParkingBlock.name).all())
+    return jsonify({"location": {"id": y.id, "name": y.name, "location": y.location or ""},
+                    "blocks": [b.to_dict() for b in blocks]})
+
+
+@app.route('/api/park/blocks/<int:bid>/slots')
+def api_park_block_slots(bid):
+    b = ParkingBlock.query.get(bid)
+    if not b:
+        return jsonify({"error": "block not found"}), 404
+    slots = (ParkingSlot.query.filter_by(block_id=bid)
+             .order_by(ParkingSlot.display_order, ParkingSlot.label).all())
+    return jsonify({"block": b.to_dict(),
+                    "slots": [s.to_dict(public=True) for s in slots]})
+
+
+@app.route('/api/park/slots/<int:sid>')
+def api_park_slot(sid):
+    s = ParkingSlot.query.get(sid)
+    if not s:
+        return jsonify({"error": "slot not found"}), 404
+    return jsonify(s.to_dict(public=True))
+
+
+# ── User: booking lifecycle (all atomic in parking_core) ──────────────────────
+@app.route('/api/park/slots/<int:sid>/hold', methods=['POST'])
+@_driver_auth_required
+def api_park_hold(sid):
+    drv = request.driver
+    data = request.get_json(silent=True) or {}
+    plate = (data.get('plate') or drv.primary_plate or '').strip().upper()
+    vtype = (data.get('vehicle_type') or drv.primary_type or 'Car').strip()
+    if not plate:
+        return jsonify({"error": "A vehicle plate is required to book."}), 400
+    slot = ParkingSlot.query.get(sid)
+    if not slot:
+        return jsonify({"error": "slot not found"}), 404
+    hours = data.get('hours')
+    try:
+        hours = int(hours) if hours else None
+    except (TypeError, ValueError):
+        hours = None
+    r, dev_code, err = park.hold_slot(sid, drv, plate, vtype, hours)
+    if err:
+        return _park_err(err)
+    AuditEvent.log(f"Slot held {slot.label} by driver {drv.id}", 'Parking')
+    payload = _reservation_payload(r)
+    payload['otp_dev'] = dev_code  # shown on-screen (no SMS provider yet)
+    payload['otp_sent_to'] = park._mask(drv.phone or drv.email)
+    return jsonify(payload)
+
+
+@app.route('/api/park/reservations/<int:rid>/confirm-otp', methods=['POST'])
+@_driver_auth_required
+def api_park_confirm_otp(rid):
+    drv = request.driver
+    r = DriverReservation.query.get(rid)
+    if not r or r.driver_id != drv.id:
+        return jsonify({"error": "reservation not found"}), 404
+    code = (request.get_json(silent=True) or {}).get('code', '')
+    ok, err = park.verify_otp(rid, code, 'reservation_confirm')
+    if not ok:
+        return _park_err(err, http=400)
+    r2, err2 = park.confirm_reservation(r, drv)
+    if err2:
+        return _park_err(err2)
+    r2.qr_token = _make_pass_token('r', r2.id)
+    db.session.commit()
+    AuditEvent.log(f"Reservation {r2.booking_code} confirmed", 'Parking')
+    return jsonify(_reservation_payload(r2))
+
+
+@app.route('/api/park/reservations/<int:rid>/resend-otp', methods=['POST'])
+@_driver_auth_required
+def api_park_resend_otp(rid):
+    drv = request.driver
+    r = DriverReservation.query.get(rid)
+    if not r or r.driver_id != drv.id:
+        return jsonify({"error": "reservation not found"}), 404
+    _row, dev_code, err = park.resend_otp(rid, drv, 'reservation_confirm')
+    if err:
+        return _park_err(err, http=429)
+    return jsonify({"status": "ok", "otp_dev": dev_code,
+                    "otp_sent_to": park._mask(drv.phone or drv.email)})
+
+
+@app.route('/api/park/reservations/<int:rid>/occupy', methods=['POST'])
+@_driver_auth_required
+def api_park_occupy(rid):
+    drv = request.driver
+    r = DriverReservation.query.get(rid)
+    if not r or r.driver_id != drv.id:
+        return jsonify({"error": "reservation not found"}), 404
+    r2, err = park.occupy_slot(r, drv)
+    if err:
+        return _park_err(err)
+    AuditEvent.log(f"Reservation {r2.booking_code} occupied", 'Parking')
+    return jsonify(_reservation_payload(r2))
+
+
+@app.route('/api/park/reservations/<int:rid>/exit', methods=['POST'])
+@_driver_auth_required
+def api_park_exit(rid):
+    drv = request.driver
+    r = DriverReservation.query.get(rid)
+    if not r or r.driver_id != drv.id:
+        return jsonify({"error": "reservation not found"}), 404
+    if (r.state or '').upper() not in DriverReservation.ACTIVE_STATES:
+        return jsonify({"error": "This reservation is not active."}), 400
+    r2, err = park.release_slot(r, terminal_state='COMPLETED', legacy='consumed',
+                                event='slot.released')
+    if err:
+        return _park_err(err)
+    AuditEvent.log(f"Reservation {r2.booking_code} exited", 'Parking')
+    return jsonify(_reservation_payload(r2))
+
+
+@app.route('/api/park/reservations/<int:rid>/cancel', methods=['POST'])
+@_driver_auth_required
+def api_park_cancel(rid):
+    drv = request.driver
+    r = DriverReservation.query.get(rid)
+    if not r or r.driver_id != drv.id:
+        return jsonify({"error": "reservation not found"}), 404
+    if (r.state or '').upper() not in ('HELD', 'OTP_PENDING', 'RESERVED'):
+        return jsonify({"error": "This reservation can no longer be cancelled."}), 400
+    r2, err = park.release_slot(r, terminal_state='CANCELLED', legacy='cancelled',
+                                event='slot.released')
+    if err:
+        return _park_err(err)
+    AuditEvent.log(f"Reservation {r2.booking_code} cancelled", 'Parking')
+    return jsonify(_reservation_payload(r2))
+
+
+@app.route('/api/park/reservations/mine')
+@_driver_auth_required
+def api_park_my_reservations():
+    drv = request.driver
+    active = (DriverReservation.query
+              .filter(DriverReservation.driver_id == drv.id,
+                      DriverReservation.state.in_(DriverReservation.ACTIVE_STATES))
+              .order_by(DriverReservation.id.desc()).all())
+    history = (DriverReservation.query
+               .filter(DriverReservation.driver_id == drv.id,
+                       ~DriverReservation.state.in_(DriverReservation.ACTIVE_STATES))
+               .order_by(DriverReservation.id.desc()).limit(50).all())
+    return jsonify({"active": [_reservation_payload(r) for r in active],
+                    "history": [r.to_dict() for r in history]})
+
+
+# ── User: watch / notify-me ───────────────────────────────────────────────────
+@app.route('/api/park/slots/<int:sid>/watch', methods=['POST'])
+@_driver_auth_required
+def api_park_watch(sid):
+    drv = request.driver
+    slot = ParkingSlot.query.get(sid)
+    if not slot:
+        return jsonify({"error": "slot not found"}), 404
+    w = SlotWatcher.query.filter_by(slot_id=sid, driver_id=drv.id).first()
+    if w:
+        w.active = True
+        w.notified_at = None
+    else:
+        db.session.add(SlotWatcher(slot_id=sid, driver_id=drv.id, active=True))
+    db.session.commit()
+    return jsonify({"status": "ok", "watching": True, "slot_id": sid})
+
+
+@app.route('/api/park/slots/<int:sid>/watch', methods=['DELETE'])
+@_driver_auth_required
+def api_park_unwatch(sid):
+    drv = request.driver
+    w = SlotWatcher.query.filter_by(slot_id=sid, driver_id=drv.id).first()
+    if w:
+        db.session.delete(w)
+        db.session.commit()
+    return jsonify({"status": "ok", "watching": False, "slot_id": sid})
+
+
+@app.route('/api/park/watches')
+@_driver_auth_required
+def api_park_my_watches():
+    drv = request.driver
+    rows = SlotWatcher.query.filter_by(driver_id=drv.id, active=True).all()
+    return jsonify([w.slot_id for w in rows])
+
+
+# ── User: register a push device token (used once mobile FCM ships) ────────────
+@app.route('/api/park/device-token', methods=['POST'])
+@_driver_auth_required
+def api_park_device_token():
+    drv = request.driver
+    data = request.get_json(silent=True) or {}
+    tok = (data.get('token') or '').strip()
+    if not tok:
+        return jsonify({"error": "token required"}), 400
+    plat = (data.get('platform') or '').strip().lower() or None
+    prov = (data.get('provider') or 'fcm').strip().lower()
+    row = DeviceToken.query.filter_by(token=tok).first()
+    if row:
+        row.driver_id = drv.id
+        row.platform = plat
+        row.provider = prov
+        row.last_seen = datetime.utcnow()
+    else:
+        db.session.add(DeviceToken(driver_id=drv.id, token=tok, platform=plat, provider=prov))
+    db.session.commit()
+    return jsonify({"status": "ok"})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ADMIN: block/slot management + live dashboard  (session-cookie admin auth)
+# ═════════════════════════════════════════════════════════════════════════════
+@app.route('/api/admin/park/locations')
+@admin_required
+def api_admin_park_locations():
+    out = []
+    for y in Yard.query.order_by(Yard.name).all():
+        blocks = ParkingBlock.query.filter_by(yard_id=y.id).count()
+        slots = ParkingSlot.query.filter_by(yard_id=y.id).all()
+        out.append({
+            "id": y.id, "name": y.name, "location": y.location or "",
+            "region": y.region or "", "site_type": y.site_type or "",
+            "capacity": y.capacity or 0,
+            "blocks": blocks, "total_slots": len(slots),
+            "available": sum(1 for s in slots if s.status == SLOT_AVAILABLE),
+            "occupied": sum(1 for s in slots if s.status in (SLOT_RESERVED, SLOT_OCCUPIED, SLOT_HELD)),
+        })
+    return jsonify(out)
+
+
+@app.route('/api/admin/park/locations/<int:yid>/blocks', methods=['GET', 'POST'])
+@admin_required
+def api_admin_park_blocks(yid):
+    y = Yard.query.get(yid)
+    if not y:
+        return jsonify({"status": "error", "message": "location not found"}), 404
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Block name is required"}), 400
+        if ParkingBlock.query.filter_by(yard_id=yid).filter(db.func.lower(ParkingBlock.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Block '{name}' already exists here"}), 400
+        code = (data.get('code') or '').strip() or None
+        slot_type = (data.get('slot_type') or 'standard').strip()
+        labels = data.get('labels')  # optional explicit list
+        try:
+            total = max(0, int(data.get('total_slots', 0) or 0))
+        except (TypeError, ValueError):
+            total = 0
+        blk = park.create_block_with_slots(yid, name, code, total, labels, slot_type)
+        AuditEvent.log(f"Block '{name}' created at {y.name} with {total or (len(labels) if labels else 0)} slots", 'Admin')
+        return jsonify({"status": "ok", "block": blk.to_dict()})
+    blocks = (ParkingBlock.query.filter_by(yard_id=yid)
+              .order_by(ParkingBlock.display_order, ParkingBlock.name).all())
+    return jsonify([b.to_dict() for b in blocks])
+
+
+@app.route('/api/admin/park/blocks/<int:bid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_park_block(bid):
+    b = ParkingBlock.query.get(bid)
+    if not b:
+        return jsonify({"status": "error", "message": "block not found"}), 404
+    if request.method == 'DELETE':
+        ParkingSlot.query.filter_by(block_id=bid).delete()
+        db.session.delete(b)
+        db.session.commit()
+        AuditEvent.log(f"Block '{b.name}' deleted", 'Admin')
+        return jsonify({"status": "ok"})
+    d = request.json or {}
+    if 'name' in d:
+        b.name = (d.get('name') or b.name).strip()
+    if 'code' in d:
+        b.code = (d.get('code') or '').strip() or None
+    if 'description' in d:
+        b.description = (d.get('description') or '').strip() or None
+    if 'display_order' in d:
+        try:
+            b.display_order = int(d.get('display_order') or 0)
+        except (TypeError, ValueError):
+            pass
+    if 'is_active' in d:
+        b.is_active = bool(d.get('is_active'))
+    db.session.commit()
+    return jsonify({"status": "ok", "block": b.to_dict()})
+
+
+@app.route('/api/admin/park/blocks/<int:bid>/slots', methods=['GET', 'POST'])
+@admin_required
+def api_admin_park_block_slots(bid):
+    b = ParkingBlock.query.get(bid)
+    if not b:
+        return jsonify({"status": "error", "message": "block not found"}), 404
+    if request.method == 'POST':
+        data = request.json or {}
+        label = (data.get('label') or '').strip() or None
+        slot_type = (data.get('slot_type') or 'standard').strip()
+        slot, err = park.add_slot(b, label, slot_type)
+        if err:
+            return jsonify({"status": "error", "message": _PARK_ERRORS.get(err, err)}), 400
+        AuditEvent.log(f"Slot {slot.label} added to {b.name}", 'Admin')
+        return jsonify({"status": "ok", "slot": slot.to_dict(public=False)})
+    slots = (ParkingSlot.query.filter_by(block_id=bid)
+             .order_by(ParkingSlot.display_order, ParkingSlot.label).all())
+    return jsonify([s.to_dict(public=False) for s in slots])
+
+
+@app.route('/api/admin/park/slots/<int:sid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_park_slot(sid):
+    s = ParkingSlot.query.get(sid)
+    if not s:
+        return jsonify({"status": "error", "message": "slot not found"}), 404
+    if request.method == 'DELETE':
+        if s.status in (SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED):
+            return jsonify({"status": "error", "message": _PARK_ERRORS['slot_in_use']}), 400
+        SlotWatcher.query.filter_by(slot_id=sid).delete()
+        db.session.delete(s)
+        db.session.commit()
+        AuditEvent.log(f"Slot {s.label} removed", 'Admin')
+        return jsonify({"status": "ok"})
+    d = request.json or {}
+    if 'label' in d:
+        s.label = (d.get('label') or s.label).strip()
+    if 'slot_type' in d:
+        s.slot_type = (d.get('slot_type') or 'standard').strip()
+    if 'display_order' in d:
+        try:
+            s.display_order = int(d.get('display_order') or 0)
+        except (TypeError, ValueError):
+            pass
+    db.session.commit()
+    return jsonify({"status": "ok", "slot": s.to_dict(public=False)})
+
+
+@app.route('/api/admin/park/slots/<int:sid>/status', methods=['POST'])
+@admin_required
+def api_admin_park_slot_status(sid):
+    s = ParkingSlot.query.get(sid)
+    if not s:
+        return jsonify({"status": "error", "message": "slot not found"}), 404
+    new_status = (request.json or {}).get('status', '').strip().upper()
+    if new_status not in (SLOT_AVAILABLE, SLOT_DISABLED, SLOT_OUT_OF_SERVICE):
+        return jsonify({"status": "error", "message": "Invalid status. Use AVAILABLE / DISABLED / OUT_OF_SERVICE."}), 400
+    s2, err = park.set_slot_admin_status(s, new_status)
+    if err:
+        return jsonify({"status": "error", "message": _PARK_ERRORS.get(err, err)}), 400
+    AuditEvent.log(f"Slot {s2.label} set {new_status}", 'Admin')
+    return jsonify({"status": "ok", "slot": s2.to_dict(public=False)})
+
+
+@app.route('/api/admin/park/slots/<int:sid>/force-release', methods=['POST'])
+@admin_required
+def api_admin_park_force_release(sid):
+    s = ParkingSlot.query.get(sid)
+    if not s:
+        return jsonify({"status": "error", "message": "slot not found"}), 404
+    park.force_release(s)
+    AuditEvent.log(f"Slot {s.label} force-released by admin", 'Admin')
+    return jsonify({"status": "ok"})
+
+
+@app.route('/api/admin/park/locations/<int:yid>/dashboard')
+@admin_required
+def api_admin_park_dashboard(yid):
+    """Live snapshot: blocks with counts, and every slot WITH occupant identity
+    (admin-only). The web dashboard polls this and also listens on SSE."""
+    y = Yard.query.get(yid)
+    if not y:
+        return jsonify({"status": "error", "message": "location not found"}), 404
+    blocks = (ParkingBlock.query.filter_by(yard_id=yid)
+              .order_by(ParkingBlock.display_order, ParkingBlock.name).all())
+    # occupant name lookup (driver id -> name) in one pass
+    slot_rows = ParkingSlot.query.filter_by(yard_id=yid).all()
+    drv_ids = {s.occupant_driver_id for s in slot_rows if s.occupant_driver_id}
+    drv_ids |= {s.held_by for s in slot_rows if s.held_by}
+    names = {}
+    if drv_ids:
+        for u in DriverUser.query.filter(DriverUser.id.in_(drv_ids)).all():
+            names[u.id] = u.name
+    res_ids = {s.reservation_id for s in slot_rows if s.reservation_id}
+    res_map = {}
+    if res_ids:
+        for r in DriverReservation.query.filter(DriverReservation.id.in_(res_ids)).all():
+            res_map[r.id] = r
+    out_blocks = []
+    for b in blocks:
+        bslots = [s for s in slot_rows if s.block_id == b.id]
+        bslots.sort(key=lambda s: (s.display_order or 0, s.label))
+        sd = []
+        for s in bslots:
+            d = s.to_dict(public=False)
+            uid = s.occupant_driver_id or s.held_by
+            d['occupant_name'] = names.get(uid, '') if uid else ''
+            r = res_map.get(s.reservation_id)
+            if r:
+                d['booking_code'] = r.booking_code or ''
+                d['expected_exit'] = r.to_dict().get('end_at', '')
+                d['reservation_state'] = r.state or ''
+            sd.append(d)
+        total, avail, occ = b.counts()
+        out_blocks.append({**b.to_dict(with_counts=False),
+                           "total_slots": total, "available": avail, "occupied": occ,
+                           "slots": sd})
+    return jsonify({
+        "location": {"id": y.id, "name": y.name, "location": y.location or ""},
+        "blocks": out_blocks,
+        "sse_clients": park.broker.count(),
+    })
 
 
 @app.route('/api/driver/register', methods=['POST'])
@@ -6443,6 +6978,12 @@ def _boot():
     # UI edits show up on the next watermark without an app restart).
     threading.Thread(target=_gate_address_refresher, daemon=True,
                      name='gate-address-refresher').start()
+
+    # Real-time parking: expire stale holds / grace-expired reservations and
+    # notify watchers. Runs on BOTH cloud and on-site (the reservation system
+    # is server-authoritative, not hardware-bound), so it starts before the
+    # CLOUD_MODE early return below.
+    park.start_sweeper(app, interval_seconds=10)
 
     if CLOUD_MODE:
         print("[CLOUD] Skipping rfid/camera/worker threads — admin+reports API only")
