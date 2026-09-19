@@ -10,3 +10,7 @@ python-dateutil==2.9.0
 waitress==3.0.0
 qrcode[pil]==7.4.2
 reportlab==4.2.5
+# FCM push (optional — only used when FCM_PROJECT_ID + FCM_SERVICE_ACCOUNT_JSON
+# are set). Imported lazily, so these are harmless if push is left disabled.
+google-auth==2.35.0
+requests==2.32.3

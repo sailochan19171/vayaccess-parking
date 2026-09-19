@@ -26,6 +26,7 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
                       SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
 import parking_core as park
+import fcm_push
 from api_integration import clean_plate_number
 from sqlalchemy import or_
 import threading
@@ -6997,6 +6998,28 @@ def _boot():
     # is server-authoritative, not hardware-bound), so it starts before the
     # CLOUD_MODE early return below.
     park.start_sweeper(app, interval_seconds=10)
+
+    # FCM push (app-killed notifications). Self-disabling: only registers when
+    # FCM_PROJECT_ID + FCM_SERVICE_ACCOUNT_JSON are set. Sends run in a daemon
+    # thread so watcher fan-out never blocks on the network.
+    if fcm_push.is_configured():
+        def _fcm_sink(driver_id, title, body, data):
+            def _work():
+                with app.app_context():
+                    rows = DeviceToken.query.filter_by(driver_id=driver_id).all()
+                    for row in rows:
+                        try:
+                            ok, err = fcm_push.send(row.token, title, body, data)
+                            if err == 'unregistered':
+                                db.session.delete(row)
+                                db.session.commit()
+                        except Exception as e:
+                            print('[FCM] send error:', e)
+            threading.Thread(target=_work, daemon=True).start()
+        park.register_push_sink(_fcm_sink)
+        print("[FCM] push sink registered")
+    else:
+        print("[FCM] not configured (set FCM_PROJECT_ID + FCM_SERVICE_ACCOUNT_JSON to enable push)")
 
     if CLOUD_MODE:
         print("[CLOUD] Skipping rfid/camera/worker threads — admin+reports API only")
