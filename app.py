@@ -5229,6 +5229,15 @@ def _build_pass_url(token):
     return f"{request.host_url.rstrip('/')}/v/{token}"
 
 
+def _build_pass_url_req(token):
+    """Build the pass URL from the HOST THAT SERVED THIS REQUEST, ignoring the
+    global public_base_url Setting (which may be a LAN-only IP configured for
+    on-site printer scanning). Used for the mobile/cloud reservation QR so a
+    scanned code always points at a host the phone can actually reach — i.e.
+    the cloud domain when the app calls the cloud backend."""
+    return f"{request.host_url.rstrip('/')}/v/{token}"
+
+
 @app.route('/api/visitors/<int:vid>/qr')
 def api_visitor_qr(vid):
     if not _QR_AVAILABLE:
@@ -5906,7 +5915,7 @@ def _reservation_payload(r):
     try:
         tok = r.qr_token or _make_pass_token('r', r.id)
         d['qr_token'] = tok
-        d['pass_url'] = _build_pass_url(tok)
+        d['pass_url'] = _build_pass_url_req(tok)
     except Exception:
         pass
     return d
@@ -6003,7 +6012,7 @@ def api_park_reservation_qr(rid):
     if not r:
         return jsonify({"error": "not found"}), 404
     tok = r.qr_token or _make_pass_token('r', r.id)
-    png = _make_qr_png(_build_pass_url(tok))
+    png = _make_qr_png(_build_pass_url_req(tok))
     return Response(png, mimetype='image/png',
                     headers={'Cache-Control': 'public, max-age=300'})
 
