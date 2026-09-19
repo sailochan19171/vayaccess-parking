@@ -6856,6 +6856,36 @@ def api_admin_drivers():
     return jsonify(out)
 
 
+@app.route('/api/admin/drivers', methods=['POST'])
+@admin_required
+def api_admin_driver_create():
+    """Admin provisions a driver login (email + password) to hand to a user.
+    The user can then sign in on the mobile app OR the web 'Book Parking' view
+    and book slots. Same DriverUser table as self-registration."""
+    data = request.get_json(silent=True) or {}
+    name  = (data.get('name')  or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    phone = (data.get('phone') or '').strip()
+    pwd   = (data.get('password') or '').strip()
+    plate = (data.get('primary_plate') or '').strip().upper()
+    vtype = (data.get('primary_type')  or 'Car').strip()
+    if not name or not email or not pwd:
+        return jsonify({"status": "error", "message": "Name, email and password are required."}), 400
+    if len(pwd) < 6:
+        return jsonify({"status": "error", "message": "Password must be at least 6 characters."}), 400
+    if vtype not in ('Car', 'Bike'):
+        vtype = 'Car'
+    if DriverUser.query.filter_by(email=email).first():
+        return jsonify({"status": "error", "message": "A user with this email already exists."}), 409
+    u = DriverUser(name=name, email=email, phone=phone or None,
+                   primary_plate=plate or None, primary_type=vtype)
+    u.set_password(pwd)
+    db.session.add(u)
+    db.session.commit()
+    AuditEvent.log(f"Admin created driver {email}", 'Driver')
+    return jsonify({"status": "ok", "user": u.to_dict()})
+
+
 @app.route('/api/admin/drivers/<int:did>')
 @login_required
 def api_admin_driver_detail(did):

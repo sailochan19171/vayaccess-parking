@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-parking1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-users2">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -2060,6 +2060,7 @@
                 <p class="hint" style="margin:2px 0 0;" id="du-meta">All self-registered mobile users. Actions here surface on the user's phone within ~5s.</p>
               </div>
               <input type="text" id="du-search" placeholder="Search name / email / phone / plate…" style="margin:0; min-width:240px;">
+              <button type="button" class="btn" id="du-add" style="background:#1240ab; color:#fff;">+ Add User</button>
               <button type="button" class="btn" id="du-refresh">Refresh</button>
             </div>
             <div class="table-wrap">
@@ -2540,6 +2541,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-parking1"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-users2"></script>
   </body>
 </html>

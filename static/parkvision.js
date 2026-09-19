@@ -3918,6 +3918,27 @@ document.querySelectorAll('.nav-item, [data-jump]').forEach(btn => {
 });
 $('du-search')?.addEventListener('input', loadDriverUsers);
 $('du-refresh')?.addEventListener('click', loadDriverUsers);
+// Admin provisions a login (email + password) to hand to a user. They can then
+// sign in on the mobile app or the web "Book Parking" view and book slots.
+$('du-add')?.addEventListener('click', async () => {
+  const name  = prompt('Full name:'); if (!name) return;
+  const email = prompt('Login email:'); if (!email) return;
+  const pwd   = prompt('Password (min 6 chars):'); if (!pwd) return;
+  const phone = prompt('Phone (optional):') || '';
+  const plate = prompt('Primary vehicle plate (optional):') || '';
+  const type  = prompt('Vehicle type (Car / Bike):', 'Car') || 'Car';
+  try {
+    const r = await fetch('/api/admin/drivers', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password: pwd, phone,
+                             primary_plate: plate, primary_type: type }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.status === 'error') throw new Error(j.message || `HTTP ${r.status}`);
+    alert(`User created.\n\nEmail: ${email}\nPassword: ${pwd}\n\nShare these — they can sign in on the mobile app or the web "Book Parking" page.`);
+    loadDriverUsers();
+  } catch (e) { alert('Could not create user: ' + e.message); }
+});
 
 // Delegated action handlers for the Driver Users row buttons.
 document.addEventListener('click', async (ev) => {
