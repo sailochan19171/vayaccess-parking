@@ -5537,7 +5537,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }).catch(function () {});
   }
   function pcmpSelectLoc(id) {
-    cmp.loc = id; cmp.co = null; g('pcmp-body').hidden = false; g('pcmp-alloc').hidden = true;
+    cmp.loc = id; cmp.co = null; g('pcmp-body').hidden = false; g('pcmp-alloc').hidden = true; g('pcmp-emp').hidden = true;
     document.querySelectorAll('#pcmp-loc-row .pk-chip').forEach(function (b) { b.classList.toggle('on', parseInt(b.dataset.loc, 10) === id); });
     pcmpLoadCompanies();
   }
@@ -5549,10 +5549,12 @@ document.addEventListener('DOMContentLoaded', function () {
         rows.map(function (c) {
           return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + c.employees + '</td><td>' + c.allocated_slots + '</td>' +
             '<td>' + esc(c.status) + '</td><td style="white-space:nowrap">' +
+            '<button class="pk-btn pk-btn-sm" data-emp="' + c.id + '" data-name="' + esc(c.name) + '">Employees</button> ' +
             '<button class="pk-btn pk-btn-sm" data-alloc="' + c.id + '" data-name="' + esc(c.name) + '">Allocation</button> ' +
             '<button class="pk-btn pk-btn-sm" data-edit="' + c.id + '" data-name="' + esc(c.name) + '">Edit</button> ' +
             '<button class="pk-btn pk-btn-sm pk-btn-danger" data-del="' + c.id + '">Delete</button></td></tr>';
         }).join('') + '</tbody></table></div>';
+      el.querySelectorAll('[data-emp]').forEach(function (b) { b.addEventListener('click', function () { pcmpOpenEmp(parseInt(b.dataset.emp, 10), b.dataset.name); }); });
       el.querySelectorAll('[data-alloc]').forEach(function (b) { b.addEventListener('click', function () { pcmpOpenAlloc(parseInt(b.dataset.alloc, 10), b.dataset.name); }); });
       el.querySelectorAll('[data-edit]').forEach(function (b) { b.addEventListener('click', function () { pcmpEdit(parseInt(b.dataset.edit, 10), b.dataset.name); }); });
       el.querySelectorAll('[data-del]').forEach(function (b) { b.addEventListener('click', function () { pcmpDelete(parseInt(b.dataset.del, 10)); }); });
@@ -5576,7 +5578,7 @@ document.addEventListener('DOMContentLoaded', function () {
     asend('/api/admin/companies/' + id, 'DELETE').then(function () { toastFn('Deleted.'); pcmpLoadCompanies(); });
   }
   function pcmpOpenAlloc(cid, name) {
-    cmp.co = cid; g('pcmp-alloc').hidden = false; g('pcmp-alloc-title').textContent = 'Slot allocation · ' + name;
+    cmp.co = cid; g('pcmp-alloc').hidden = false; g('pcmp-emp').hidden = true; g('pcmp-alloc-title').textContent = 'Slot allocation · ' + name;
     Promise.all([aget('/api/admin/park/locations/' + cmp.loc + '/blocks'),
                  aget('/api/admin/companies/' + cid + '/allocations')]).then(function (r) {
       var blocks = (r[0] && r[0].blocks) || r[0] || [];
@@ -5604,9 +5606,61 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     });
   }
+  // ── employees per company (link users so they can book allocated slots) ─────
+  function pcmpOpenEmp(cid, name) {
+    cmp.empCo = cid; g('pcmp-emp').hidden = false; g('pcmp-alloc').hidden = true;
+    g('pcmp-emp-title').textContent = 'Employees · ' + name;
+    pcmpLoadEmp();
+  }
+  function pcmpLoadEmp() {
+    aget('/api/admin/drivers').then(function (rows) {
+      var mine = rows.filter(function (u) { return u.company_id === cmp.empCo; });
+      var unassigned = rows.filter(function (u) { return !u.company_id; });
+      var el = g('pcmp-emp-rows');
+      var memTbl = mine.length
+        ? '<table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Emp ID</th><th>Plate</th><th></th></tr></thead><tbody>' +
+          mine.map(function (u) {
+            return '<tr><td><b>' + esc(u.name) + '</b></td><td>' + esc(u.email) + '</td><td>' + esc(u.employee_id || '') + '</td><td>' + esc(u.primary_plate || '') + '</td>' +
+              '<td><button class="pk-btn pk-btn-sm pk-btn-danger" data-unlink="' + u.id + '">Remove</button></td></tr>';
+          }).join('') + '</tbody></table>'
+        : '<div class="pk-empty">No employees yet. Use “+ Add Employee”.</div>';
+      var unTbl = unassigned.length
+        ? '<h4 style="margin:14px 0 6px">Assign an existing user</h4><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th></th></tr></thead><tbody>' +
+          unassigned.slice(0, 50).map(function (u) {
+            return '<tr><td>' + esc(u.name) + '</td><td>' + esc(u.email) + '</td>' +
+              '<td><button class="pk-btn pk-btn-sm" data-assign="' + u.id + '">Assign</button></td></tr>';
+          }).join('') + '</tbody></table>'
+        : '';
+      el.innerHTML = '<div style="overflow-x:auto">' + memTbl + unTbl + '</div>';
+      el.querySelectorAll('[data-unlink]').forEach(function (b) { b.addEventListener('click', function () { pcmpSetEmpCompany(parseInt(b.dataset.unlink, 10), null); }); });
+      el.querySelectorAll('[data-assign]').forEach(function (b) { b.addEventListener('click', function () { pcmpSetEmpCompany(parseInt(b.dataset.assign, 10), cmp.empCo); }); });
+    });
+  }
+  function pcmpSetEmpCompany(uid, cid) {
+    asend('/api/admin/drivers/' + uid, 'PUT', { company_id: cid, location_id: cid ? cmp.loc : null }).then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn(cid ? 'Employee assigned.' : 'Employee removed.'); pcmpLoadEmp(); pcmpLoadCompanies();
+    });
+  }
+  function pcmpAddEmp() {
+    if (!cmp.empCo) return;
+    var name = window.prompt('Employee name:'); if (!name) return;
+    var email = window.prompt('Login email:'); if (!email) return;
+    var pwd = window.prompt('Password (min 6 chars):'); if (!pwd) return;
+    var emp = window.prompt('Employee ID (optional):') || '';
+    var plate = window.prompt('Vehicle plate (optional):') || '';
+    asend('/api/admin/drivers', 'POST', { name: name, email: email, password: pwd,
+      company_id: cmp.empCo, location_id: cmp.loc, employee_id: emp, primary_plate: plate }).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
+      window.alert('Employee created.\n\nEmail: ' + email + '\nPassword: ' + pwd + '\n\nThey can sign in on the app and book this company’s slots.');
+      pcmpLoadEmp(); pcmpLoadCompanies();
+    });
+  }
   function pcmpInit() {
     var add = g('pcmp-add-co'); if (add && !add._w) { add._w = 1; add.addEventListener('click', pcmpAddCompany); }
     var cl = g('pcmp-alloc-close'); if (cl && !cl._w) { cl._w = 1; cl.addEventListener('click', function () { g('pcmp-alloc').hidden = true; }); }
+    var ec = g('pcmp-emp-close'); if (ec && !ec._w) { ec._w = 1; ec.addEventListener('click', function () { g('pcmp-emp').hidden = true; }); }
+    var ea = g('pcmp-emp-add'); if (ea && !ea._w) { ea._w = 1; ea.addEventListener('click', pcmpAddEmp); }
     var btn = document.querySelector('.nav-item[data-view="park-companies"]');
     if (btn && !btn._w) { btn._w = 1; btn.addEventListener('click', pcmpEnter); }
     if (active('park-companies')) pcmpEnter();

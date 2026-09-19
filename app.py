@@ -7361,6 +7361,21 @@ def api_admin_driver_update(did):
             if fld == 'primary_plate': val = val.upper()
             if fld == 'primary_type' and val and val not in ('Car','Bike'): val = 'Car'
             setattr(u, fld, val or None)
+    # Org assignment: link/unlink this user to a company (makes them an employee
+    # who can book that company's allocated slots). location follows the company.
+    if 'company_id' in data:
+        cid = data.get('company_id')
+        if cid:
+            co = Company.query.get(cid)
+            if co:
+                u.company_id = co.id
+                u.location_id = data.get('location_id') or co.yard_id
+        else:
+            u.company_id = None
+    if 'employee_id' in data:
+        u.employee_id = (data.get('employee_id') or '').strip() or None
+    if 'status' in data:
+        u.status = (data.get('status') or 'active').strip()
     pwd = (data.get('password') or '').strip()
     if pwd:
         if len(pwd) < 6:

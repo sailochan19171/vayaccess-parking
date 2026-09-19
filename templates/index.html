@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-reports4">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-emp5">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -2526,6 +2526,14 @@
               <p class="pk-muted" style="margin:0 0 10px">Set how many slots this company gets in each basement. Booked slots are never removed.</p>
               <div id="pcmp-alloc-rows"></div>
             </div>
+            <div id="pcmp-emp" class="pk-panel" hidden>
+              <div class="pk-panel-head"><h3 id="pcmp-emp-title">Employees</h3>
+                <div class="pk-setup-actions">
+                  <button class="pk-btn pk-btn-primary pk-btn-sm" id="pcmp-emp-add">+ Add Employee</button>
+                  <button class="pk-btn pk-btn-sm" id="pcmp-emp-close">Close</button></div></div>
+              <p class="pk-muted" style="margin:0 0 10px">Employees added here are linked to this company &amp; location, so they can log in and book its allocated slots. You can also assign existing unassigned users.</p>
+              <div id="pcmp-emp-rows"></div>
+            </div>
           </div>
         </section>
 
@@ -2638,6 +2646,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-reports4"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-emp5"></script>
   </body>
 </html>
