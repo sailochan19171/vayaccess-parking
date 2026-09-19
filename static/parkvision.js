@@ -164,6 +164,9 @@ function switchView(name) {
     'menu-mgmt': 'Menu Management',  role: 'Role Management',
     'role-perm': 'Role Permission',  dictionary: 'Dictionary Managed',
     'audit-log': 'Audit Log',         'uhf-captures': 'UHF Captures',
+    'driver-users': 'Driver Users (Mobile)',
+    'park-book': 'Book Parking',      'park-live': 'Live Parking Dashboard',
+    'park-setup': 'Parking Setup',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
 }
@@ -4834,5 +4837,636 @@ document.addEventListener('DOMContentLoaded', function () {
   if (typeof switchView === 'function') {
     var _prnOrigSwitch = switchView;
     switchView = function (n) { _prnOrigSwitch(n); if (n === 'printer') prnEnter(); };
+  }
+})();
+
+// ═══════════════════════════ SMART PARKING (real-time) ═══════════════════════
+// Three views share one IIFE so they can share the driver token, buzzer and
+// SSE helpers. Follows the sol*/prn* module conventions (Active/Enter/poll +
+// switchView wrap). Backend is the source of truth; SSE pushes live changes.
+(function () {
+  var g = function (id) { return document.getElementById(id); };
+  var esc = window._esc || function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+  };
+  var toastFn = function (m, k) { if (typeof toast === 'function') toast(m, k || 'ok'); };
+
+  // ── driver auth (own token, independent of the admin session cookie) ────────
+  var TOKEN_KEY = 'vay_driver_token', USER_KEY = 'vay_driver_user';
+  function getTok() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+  function getUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || '{}'); } catch (e) { return {}; } }
+  function setAuth(t, u) { try { localStorage.setItem(TOKEN_KEY, t); localStorage.setItem(USER_KEY, JSON.stringify(u || {})); } catch (e) {} }
+  function clearAuth() { try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) {} }
+  function authHdrs(json) { var h = {}; if (json) h['Content-Type'] = 'application/json'; var t = getTok(); if (t) h['Authorization'] = 'Bearer ' + t; return h; }
+  function jget(url) { return fetch(url, { headers: authHdrs(false), cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.json(); }); }
+  function jsend(url, method, body) {
+    return fetch(url, { method: method, headers: authHdrs(true), credentials: 'same-origin',
+      body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, d: d }; })
+        .catch(function () { return { ok: r.ok, status: r.status, d: {} }; }); });
+  }
+
+  // ── buzzer + browser notification ───────────────────────────────────────────
+  var _actx = null;
+  function soundOn() { try { return localStorage.getItem('pk_sound') !== '0'; } catch (e) { return true; } }
+  function setSound(on) { try { localStorage.setItem('pk_sound', on ? '1' : '0'); } catch (e) {} }
+  function buzz() {
+    if (!soundOn()) return;
+    try {
+      _actx = _actx || new (window.AudioContext || window.webkitAudioContext)();
+      var ctx = _actx, t = ctx.currentTime;
+      [880, 1175].forEach(function (f, i) {
+        var o = ctx.createOscillator(), gn = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = f; o.connect(gn); gn.connect(ctx.destination);
+        var st = t + i * 0.18;
+        gn.gain.setValueAtTime(0.0001, st);
+        gn.gain.exponentialRampToValueAtTime(0.3, st + 0.02);
+        gn.gain.exponentialRampToValueAtTime(0.0001, st + 0.16);
+        o.start(st); o.stop(st + 0.17);
+      });
+    } catch (e) {}
+  }
+  function notify(title, body) {
+    try {
+      if (!('Notification' in window)) return;
+      if (Notification.permission === 'granted') new Notification(title, { body: body });
+      else if (Notification.permission !== 'denied') Notification.requestPermission();
+    } catch (e) {}
+  }
+
+  // ── SSE: one connection per active view, filtered by location ───────────────
+  function makeSSE(locationId, onEvent, onState) {
+    var es = null, closed = false;
+    function open() {
+      if (closed) return;
+      try {
+        es = new EventSource('/api/events/slots?location=' + locationId);
+        es.onopen = function () { onState && onState(true); };
+        es.onmessage = function (ev) { try { onEvent(JSON.parse(ev.data)); } catch (e) {} };
+        es.onerror = function () { onState && onState(false); }; // EventSource auto-reconnects
+      } catch (e) { onState && onState(false); }
+    }
+    open();
+    return { close: function () { closed = true; if (es) { try { es.close(); } catch (e) {} } } };
+  }
+
+  var STATUS_TEXT = { AVAILABLE: 'Available', HELD: 'Held', RESERVED: 'Reserved',
+                      OCCUPIED: 'Occupied', DISABLED: 'Disabled', OUT_OF_SERVICE: 'Out of svc' };
+
+  // ═══════════════════════ 1) BOOK PARKING (driver) ════════════════════════════
+  var pbk = {
+    loc: null, block: null, slots: {}, mine: [], watches: {}, sse: null, otpRes: null
+  };
+  function pbkActive() { var el = g('park-book'); return el && el.classList.contains('active'); }
+
+  function pbkEnter() {
+    if (!pbkActive()) return;
+    if (getTok()) { pbkShowApp(); } else { pbkShowLogin(); }
+  }
+  function pbkShowLogin() { g('pbk-login').hidden = false; g('pbk-app').hidden = true; }
+  function pbkShowApp() {
+    g('pbk-login').hidden = true; g('pbk-app').hidden = false;
+    var u = getUser();
+    g('pbk-who').textContent = (u && u.name) ? u.name : (u && u.email) || 'Driver';
+    g('pbk-sound').checked = soundOn();
+    pbkLoadLocations(); pbkLoadMine(); pbkLoadWatches();
+    notify('', '');  // nudge permission prompt (no-op notification)
+  }
+
+  function pbkMsg(t, ok) { var el = g('pbk-login-msg'); if (!el) return; el.textContent = t || ''; el.hidden = !t; el.className = 'pk-msg' + (ok ? ' ok' : ''); }
+
+  function pbkLogin() {
+    var email = (g('pbk-email').value || '').trim().toLowerCase();
+    var pass = g('pbk-pass').value || '';
+    if (!email || !pass) { pbkMsg('Enter email and password.'); return; }
+    g('pbk-login-btn').disabled = true;
+    fetch('/api/driver/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: pass }) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        g('pbk-login-btn').disabled = false;
+        if (!res.ok || !res.d.token) { pbkMsg(res.d.error || 'Sign in failed.'); return; }
+        setAuth(res.d.token, res.d.user); pbkMsg('', true); pbkShowApp();
+      }).catch(function () { g('pbk-login-btn').disabled = false; pbkMsg('Network error.'); });
+  }
+
+  function pbkRegister() {
+    var email = (g('pbk-email').value || '').trim().toLowerCase();
+    var pass = g('pbk-pass').value || '';
+    if (!email || pass.length < 6) { pbkMsg('Enter email and a 6+ char password to register.'); return; }
+    var name = email.split('@')[0];
+    g('pbk-reg-btn').disabled = true;
+    fetch('/api/driver/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, email: email, password: pass }) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        g('pbk-reg-btn').disabled = false;
+        if (!res.ok || !res.d.token) { pbkMsg(res.d.error || 'Registration failed.'); return; }
+        setAuth(res.d.token, res.d.user); pbkMsg('', true); pbkShowApp();
+      }).catch(function () { g('pbk-reg-btn').disabled = false; pbkMsg('Network error.'); });
+  }
+
+  function pbkLogout() {
+    if (pbk.sse) { pbk.sse.close(); pbk.sse = null; }
+    clearAuth(); pbk.loc = null; pbk.block = null; pbk.slots = {};
+    pbkShowLogin();
+  }
+
+  function pbkLoadLocations() {
+    jget('/api/park/locations').then(function (rows) {
+      var row = g('pbk-loc-row');
+      if (!rows || !rows.length) { row.innerHTML = '<span class="pk-muted">No bookable locations yet. An admin adds blocks &amp; slots in Parking Setup.</span>'; return; }
+      row.innerHTML = rows.map(function (l) {
+        return '<button class="pk-chip' + (pbk.loc === l.id ? ' on' : '') + '" data-loc="' + l.id + '">' +
+          esc(l.name) + ' <span class="pk-muted">(' + l.available + '/' + l.total_slots + ')</span></button>';
+      }).join('');
+      row.querySelectorAll('[data-loc]').forEach(function (b) {
+        b.addEventListener('click', function () { pbkSelectLoc(parseInt(b.dataset.loc, 10)); });
+      });
+      if (pbk.loc == null && rows.length === 1) pbkSelectLoc(rows[0].id);
+    });
+  }
+
+  function pbkSelectLoc(id) {
+    pbk.loc = id; pbk.block = null;
+    document.querySelectorAll('#pbk-loc-row .pk-chip').forEach(function (b) {
+      b.classList.toggle('on', parseInt(b.dataset.loc, 10) === id); });
+    g('pbk-slotwrap').hidden = true;
+    pbkLoadBlocks();
+    if (pbk.sse) pbk.sse.close();
+    pbk.sse = makeSSE(id, pbkOnEvent, function (on) {
+      var c = g('pbk-conn'); if (c) { c.textContent = on ? '● live' : '● offline'; c.classList.toggle('on', on); }
+    });
+  }
+
+  function pbkLoadBlocks() {
+    jget('/api/park/locations/' + pbk.loc + '/blocks').then(function (data) {
+      var wrap = g('pbk-blockwrap'); wrap.hidden = false;
+      var blocks = (data && data.blocks) || [];
+      g('pbk-block-title').textContent = (data.location ? data.location.name : 'Blocks');
+      var el = g('pbk-blocks');
+      if (!blocks.length) { el.innerHTML = '<div class="pk-empty">No blocks configured here yet.</div>'; return; }
+      el.innerHTML = blocks.map(function (b) {
+        var pct = b.total_slots ? Math.round((b.occupied / b.total_slots) * 100) : 0;
+        return '<div class="pk-block-card' + (pbk.block === b.id ? ' on' : '') + '" data-block="' + b.id + '">' +
+          '<h4>' + esc(b.name) + '</h4>' +
+          '<div class="pk-block-counts"><span class="pk-c-green"><b>' + b.available + '</b> free</span>' +
+          '<span class="pk-c-red"><b>' + b.occupied + '</b> taken</span>' +
+          '<span class="pk-c-total">' + b.total_slots + ' total</span></div>' +
+          '<div class="pk-bar"><i style="width:' + pct + '%"></i></div></div>';
+      }).join('');
+      el.querySelectorAll('[data-block]').forEach(function (c) {
+        c.addEventListener('click', function () { pbkSelectBlock(parseInt(c.dataset.block, 10), c.querySelector('h4').textContent); });
+      });
+    });
+  }
+
+  function pbkSelectBlock(id, name) {
+    pbk.block = id;
+    document.querySelectorAll('#pbk-blocks .pk-block-card').forEach(function (c) {
+      c.classList.toggle('on', parseInt(c.dataset.block, 10) === id); });
+    g('pbk-slot-title').textContent = 'Slots · ' + (name || '');
+    g('pbk-slotwrap').hidden = false;
+    pbkLoadSlots();
+  }
+
+  function pbkLoadSlots() {
+    jget('/api/park/blocks/' + pbk.block + '/slots').then(function (data) {
+      pbk.slots = {};
+      (data.slots || []).forEach(function (s) { pbk.slots[s.id] = s; });
+      pbkRenderSlots();
+    });
+  }
+
+  function pbkRenderSlots() {
+    var el = g('pbk-grid');
+    var arr = Object.keys(pbk.slots).map(function (k) { return pbk.slots[k]; });
+    arr.sort(function (a, b) { return (a.display_order - b.display_order) || a.label.localeCompare(b.label); });
+    g('pbk-grid-empty').hidden = arr.length > 0;
+    var mineSlotIds = {};
+    pbk.mine.forEach(function (r) { if (r.slot_id) mineSlotIds[r.slot_id] = r; });
+    el.innerHTML = arr.map(function (s) {
+      var cls = 's-' + (s.color || 'grey');
+      var mine = mineSlotIds[s.id] ? ' mine' : '';
+      var watching = pbk.watches[s.id] ? '<span class="pk-watch" title="Watching">🔔</span>' : '';
+      return '<button class="pk-slot ' + cls + mine + '" data-slot="' + s.id + '" ' +
+        'aria-label="Slot ' + esc(s.label) + ' ' + esc(STATUS_TEXT[s.status] || s.status) + '">' +
+        watching +
+        '<span class="pk-slot-lbl">' + esc(s.label) + '</span>' +
+        '<span class="pk-slot-st">' + esc(STATUS_TEXT[s.status] || s.status) + '</span></button>';
+    }).join('');
+    el.querySelectorAll('[data-slot]').forEach(function (b) {
+      b.addEventListener('click', function () { pbkSlotClick(parseInt(b.dataset.slot, 10)); });
+    });
+  }
+
+  function pbkSlotClick(id) {
+    var s = pbk.slots[id]; if (!s) return;
+    if (s.status === 'AVAILABLE') { pbkOpenBooking(s); return; }
+    if (s.status === 'RESERVED' || s.status === 'OCCUPIED' || s.status === 'HELD') {
+      // offer watch / unwatch
+      if (pbk.watches[id]) {
+        jsend('/api/park/slots/' + id + '/watch', 'DELETE').then(function () {
+          delete pbk.watches[id]; pbkRenderSlots(); toastFn('Stopped watching ' + s.label);
+        });
+      } else if (window.confirm('Slot ' + s.label + ' is ' + (STATUS_TEXT[s.status] || s.status).toLowerCase() + '.\nNotify me (buzzer + notification) when it frees up?')) {
+        jsend('/api/park/slots/' + id + '/watch', 'POST').then(function () {
+          pbk.watches[id] = true; pbkRenderSlots(); toastFn('You will be notified when ' + s.label + ' frees up.', 'ok');
+        });
+      }
+      return;
+    }
+    toastFn('Slot ' + s.label + ' is not available.', 'error');
+  }
+
+  // ── booking modal (confirm → OTP → success) ─────────────────────────────────
+  function pbkModal(open) { g('pbk-modal').hidden = !open; if (!open) pbk.otpRes = null; }
+  function pbkModalMsg(t, ok) { var el = g('pbk-modal-msg'); el.textContent = t || ''; el.hidden = !t; el.className = 'pk-msg' + (ok ? ' ok' : ''); }
+
+  function pbkOpenBooking(s) {
+    var u = getUser();
+    g('pbk-modal-title').textContent = 'Confirm slot ' + s.label;
+    g('pbk-modal-body').innerHTML =
+      '<div class="pk-field"><label>Vehicle plate</label><input id="pbk-plate" value="' + esc(u.primary_plate || '') + '" placeholder="TS09AB1234"></div>' +
+      '<div class="pk-field"><label>Duration (hours)</label><input id="pbk-hours" type="number" min="1" max="24" value="4"></div>' +
+      '<p class="pk-muted">An OTP will be sent to confirm this booking.</p>';
+    g('pbk-modal-foot').innerHTML =
+      '<button class="pk-btn" id="pbk-cancel-btn">Cancel</button>' +
+      '<button class="pk-btn pk-btn-primary" id="pbk-hold-btn">Send OTP &amp; hold</button>';
+    pbkModalMsg('');
+    pbkModal(true);
+    g('pbk-cancel-btn').onclick = function () { pbkModal(false); };
+    g('pbk-hold-btn').onclick = function () { pbkDoHold(s); };
+  }
+
+  function pbkDoHold(s) {
+    var plate = (g('pbk-plate').value || '').trim().toUpperCase();
+    var hours = parseInt(g('pbk-hours').value, 10) || 4;
+    if (!plate) { pbkModalMsg('Enter your vehicle plate.'); return; }
+    g('pbk-hold-btn').disabled = true;
+    jsend('/api/park/slots/' + s.id + '/hold', 'POST', { plate: plate, hours: hours }).then(function (res) {
+      g('pbk-hold-btn').disabled = false;
+      if (!res.ok) { pbkModalMsg(res.d.error || 'Could not hold the slot.'); pbkLoadSlots(); return; }
+      pbk.otpRes = res.d;
+      pbkOtpStep(res.d);
+    }).catch(function () { g('pbk-hold-btn').disabled = false; pbkModalMsg('Network error.'); });
+  }
+
+  function pbkOtpStep(r) {
+    g('pbk-modal-title').textContent = 'Enter OTP';
+    var dev = r.otp_dev ? '<div class="pk-otp-dev">Demo mode — your OTP is <b>' + esc(r.otp_dev) + '</b> (no SMS provider configured yet)</div>' : '';
+    g('pbk-modal-body').innerHTML =
+      '<p class="pk-muted">OTP sent to ' + esc(r.otp_sent_to || 'your device') + ' for slot <b>' + esc(r.slot_label) + '</b>.</p>' +
+      dev +
+      '<input id="pbk-otp" class="pk-field" style="width:100%;padding:12px;font-size:20px;letter-spacing:6px;text-align:center" ' +
+      'inputmode="numeric" maxlength="8" placeholder="______">' +
+      '<p class="pk-muted" style="text-align:center">This slot is held for you for a short time.</p>';
+    g('pbk-modal-foot').innerHTML =
+      '<button class="pk-btn" id="pbk-otp-resend">Resend</button>' +
+      '<button class="pk-btn" id="pbk-otp-cancel">Cancel</button>' +
+      '<button class="pk-btn pk-btn-primary" id="pbk-otp-verify">Verify</button>';
+    pbkModalMsg('');
+    g('pbk-otp').focus();
+    g('pbk-otp-verify').onclick = function () { pbkVerify(r); };
+    g('pbk-otp-cancel').onclick = function () { pbkCancelHold(r); };
+    g('pbk-otp-resend').onclick = function () { pbkResend(r); };
+  }
+
+  function pbkVerify(r) {
+    var code = (g('pbk-otp').value || '').trim();
+    if (!code) { pbkModalMsg('Enter the OTP.'); return; }
+    g('pbk-otp-verify').disabled = true;
+    jsend('/api/park/reservations/' + r.id + '/confirm-otp', 'POST', { code: code }).then(function (res) {
+      g('pbk-otp-verify').disabled = false;
+      if (!res.ok) { pbkModalMsg(res.d.error || 'Incorrect OTP.'); return; }
+      pbkSuccess(res.d);
+      pbkLoadMine(); pbkLoadSlots();
+    }).catch(function () { g('pbk-otp-verify').disabled = false; pbkModalMsg('Network error.'); });
+  }
+
+  function pbkResend(r) {
+    jsend('/api/park/reservations/' + r.id + '/resend-otp', 'POST').then(function (res) {
+      if (!res.ok) { pbkModalMsg(res.d.error || 'Could not resend.'); return; }
+      pbkModalMsg(res.d.otp_dev ? ('New OTP (demo): ' + res.d.otp_dev) : 'A new OTP was sent.', true);
+    });
+  }
+
+  function pbkCancelHold(r) {
+    jsend('/api/park/reservations/' + r.id + '/cancel', 'POST').then(function () {
+      pbkModal(false); pbkLoadSlots(); pbkLoadMine();
+    });
+  }
+
+  function pbkSuccess(r) {
+    g('pbk-modal-title').textContent = 'Reservation confirmed';
+    g('pbk-modal-body').innerHTML =
+      '<div class="pk-qr"><img src="/api/park/reservations/' + r.id + '/qr.png" alt="Booking QR"></div>' +
+      '<div class="pk-kv"><span>Booking</span><b>' + esc(r.booking_code || '') + '</b></div>' +
+      '<div class="pk-kv"><span>Location</span><b>' + esc(r.yard || '') + '</b></div>' +
+      '<div class="pk-kv"><span>Slot</span><b>' + esc(r.slot_label || '') + '</b></div>' +
+      '<div class="pk-kv"><span>Vehicle</span><b>' + esc(r.vehicle_plate || '') + '</b></div>' +
+      '<div class="pk-kv"><span>Must arrive by</span><b>' + esc(r.grace_until || '—') + '</b></div>' +
+      '<p class="pk-muted" style="margin-top:10px">Scan this QR at the gate. Manage it under “My parking”.</p>';
+    g('pbk-modal-foot').innerHTML = '<button class="pk-btn pk-btn-primary" id="pbk-done">Done</button>';
+    pbkModalMsg('');
+    g('pbk-done').onclick = function () { pbkModal(false); };
+    toastFn('Slot ' + r.slot_label + ' reserved — ' + (r.booking_code || ''), 'ok');
+  }
+
+  // ── my parking ──────────────────────────────────────────────────────────────
+  function pbkLoadMine() {
+    jget('/api/park/reservations/mine').then(function (data) {
+      pbk.mine = (data && data.active) || [];
+      pbkRenderMine();
+      if (Object.keys(pbk.slots).length) pbkRenderSlots();
+    });
+  }
+
+  function pbkRenderMine() {
+    var el = g('pbk-mine');
+    if (!pbk.mine.length) { el.innerHTML = ''; return; }
+    el.innerHTML = pbk.mine.map(function (r) {
+      var actions = '';
+      if (r.state === 'OTP_PENDING') {
+        actions = '<button class="pk-btn" data-act="otp" data-id="' + r.id + '">Enter OTP</button>' +
+                  '<button class="pk-btn" data-act="cancel" data-id="' + r.id + '">Cancel</button>';
+      } else if (r.state === 'RESERVED') {
+        actions = '<button class="pk-btn" data-act="occupy" data-id="' + r.id + '">I have parked</button>' +
+                  '<button class="pk-btn" data-act="qr" data-id="' + r.id + '">View QR</button>' +
+                  '<button class="pk-btn" data-act="cancel" data-id="' + r.id + '">Cancel</button>';
+      } else if (r.state === 'OCCUPIED') {
+        actions = '<button class="pk-btn" data-act="exit" data-id="' + r.id + '">Exit parking</button>' +
+                  '<button class="pk-btn" data-act="qr" data-id="' + r.id + '">View QR</button>';
+      }
+      return '<div class="pk-mine-card"><h4>My parking</h4>' +
+        '<div class="pk-mine-slot">' + esc(r.slot_label || '') + ' <span class="pk-mine-badge">' + esc(r.state || '') + '</span></div>' +
+        '<div>' + esc(r.yard || '') + ' · ' + esc(r.booking_code || '') + '</div>' +
+        (r.grace_until && r.state === 'RESERVED' ? '<div class="pk-muted" style="color:#dbe6ff">Arrive by ' + esc(r.grace_until) + '</div>' : '') +
+        '<div class="pk-mine-actions">' + actions + '</div></div>';
+    }).join('');
+    el.querySelectorAll('[data-act]').forEach(function (b) {
+      b.addEventListener('click', function () { pbkMineAction(b.dataset.act, parseInt(b.dataset.id, 10)); });
+    });
+  }
+
+  function pbkMineAction(act, id) {
+    var r = pbk.mine.filter(function (x) { return x.id === id; })[0];
+    if (act === 'otp') { pbk.otpRes = r; pbkModal(true); pbkOtpStep(r); return; }
+    if (act === 'qr') {
+      g('pbk-modal-title').textContent = 'Booking pass';
+      g('pbk-modal-body').innerHTML = '<div class="pk-qr"><img src="/api/park/reservations/' + id + '/qr.png"></div>' +
+        '<div class="pk-kv"><span>Booking</span><b>' + esc(r.booking_code || '') + '</b></div>' +
+        '<div class="pk-kv"><span>Slot</span><b>' + esc(r.slot_label || '') + '</b></div>';
+      g('pbk-modal-foot').innerHTML = '<button class="pk-btn pk-btn-primary" id="pbk-done2">Close</button>';
+      pbkModalMsg(''); pbkModal(true); g('pbk-done2').onclick = function () { pbkModal(false); };
+      return;
+    }
+    var url = '/api/park/reservations/' + id + '/' + (act === 'occupy' ? 'occupy' : act === 'exit' ? 'exit' : 'cancel');
+    if (act === 'cancel' && !window.confirm('Cancel this reservation?')) return;
+    jsend(url, 'POST').then(function (res) {
+      if (!res.ok) { toastFn(res.d.error || 'Action failed.', 'error'); return; }
+      toastFn(act === 'occupy' ? 'Parked — enjoy!' : act === 'exit' ? 'Exited. Slot freed.' : 'Cancelled.', 'ok');
+      pbkLoadMine(); pbkLoadSlots();
+    });
+  }
+
+  function pbkLoadWatches() {
+    jget('/api/park/watches').then(function (ids) {
+      pbk.watches = {}; (ids || []).forEach(function (id) { pbk.watches[id] = true; });
+      if (Object.keys(pbk.slots).length) pbkRenderSlots();
+    });
+  }
+
+  // ── live SSE handler ────────────────────────────────────────────────────────
+  function pbkOnEvent(ev) {
+    if (!ev || !ev.slotId) return;
+    var s = pbk.slots[ev.slotId];
+    var wasWatched = pbk.watches[ev.slotId];
+    if (s) {
+      s.status = ev.newStatus; s.color = ev.color; s.version = ev.version;
+      pbkRenderSlots();
+      // flash + buzzer when a slot I'm watching frees up
+      if (ev.newStatus === 'AVAILABLE' && wasWatched) {
+        buzz(); notify('🚗 Slot available', 'Slot ' + (ev.slotLabel || s.label) + ' is now free.');
+        var cell = g('pbk-grid').querySelector('[data-slot="' + ev.slotId + '"]');
+        if (cell) { var f = document.createElement('span'); f.className = 'pk-flash'; cell.appendChild(f); setTimeout(function () { try { cell.removeChild(f); } catch (e) {} }, 3500); }
+        pbk.watches[ev.slotId] = false; pbkLoadWatches();
+      }
+    } else if (ev.newStatus === 'AVAILABLE' && wasWatched) {
+      // watched slot in another (not-open) block: still alert
+      buzz(); notify('🚗 Slot available', 'Slot ' + (ev.slotLabel || '') + ' is now free.');
+      pbk.watches[ev.slotId] = false; pbkLoadWatches();
+    }
+    // keep block counts fresh
+    if (pbk.loc) pbkLoadBlocks();
+  }
+
+  function pbkInit() {
+    var wire = function (id, fn, evt) { var e = g(id); if (e && !e._pkw) { e._pkw = 1; e.addEventListener(evt || 'click', fn); } };
+    wire('pbk-login-btn', pbkLogin); wire('pbk-reg-btn', pbkRegister); wire('pbk-logout', pbkLogout);
+    wire('pbk-modal-close', function () { pbkModal(false); });
+    wire('pbk-sound', function () { setSound(g('pbk-sound').checked); if (g('pbk-sound').checked) buzz(); }, 'change');
+    var pass = g('pbk-pass'); if (pass && !pass._pkw) { pass._pkw = 1; pass.addEventListener('keydown', function (e) { if (e.key === 'Enter') pbkLogin(); }); }
+    var back = g('pbk-modal'); if (back && !back._pkw) { back._pkw = 1; back.addEventListener('click', function (e) { if (e.target === back) pbkModal(false); }); }
+    var btn = document.querySelector('.nav-item[data-view="park-book"]');
+    if (btn && !btn._pkw) { btn._pkw = 1; btn.addEventListener('click', pbkEnter); }
+    if (!pbkInit._poll) pbkInit._poll = setInterval(function () { if (pbkActive() && getTok()) pbkLoadMine(); }, 15000);
+    if (pbkActive()) pbkEnter();
+  }
+
+  // ═══════════════════════ 2) LIVE DASHBOARD (admin) ═══════════════════════════
+  var plv = { loc: null, sse: null, locs: [] };
+  function plvActive() { var el = g('park-live'); return el && el.classList.contains('active'); }
+
+  function plvEnter() {
+    if (!plvActive()) return;
+    jget('/api/admin/park/locations').then(function (rows) {
+      plv.locs = rows || [];
+      var row = g('plv-loc-row');
+      if (!plv.locs.length) { row.innerHTML = '<span class="pk-muted">No locations. Add blocks in Parking Setup.</span>'; g('plv-empty').hidden = false; return; }
+      row.innerHTML = plv.locs.map(function (l) {
+        return '<button class="pk-chip' + (plv.loc === l.id ? ' on' : '') + '" data-loc="' + l.id + '">' + esc(l.name) + '</button>';
+      }).join('');
+      row.querySelectorAll('[data-loc]').forEach(function (b) {
+        b.addEventListener('click', function () { plvSelect(parseInt(b.dataset.loc, 10)); });
+      });
+      if (plv.loc == null) plvSelect(plv.locs[0].id); else plvLoad();
+    });
+  }
+
+  function plvSelect(id) {
+    plv.loc = id;
+    document.querySelectorAll('#plv-loc-row .pk-chip').forEach(function (b) { b.classList.toggle('on', parseInt(b.dataset.loc, 10) === id); });
+    plvLoad();
+    if (plv.sse) plv.sse.close();
+    plv.sse = makeSSE(id, function () { plvLoad(); }, function (on) {
+      var c = g('plv-conn'); if (c) { c.textContent = on ? '● live' : '● offline'; c.classList.toggle('on', on); }
+    });
+  }
+
+  function plvLoad() {
+    if (!plv.loc) return;
+    jget('/api/admin/park/locations/' + plv.loc + '/dashboard').then(function (data) {
+      g('plv-empty').hidden = true;
+      var blocks = (data && data.blocks) || [];
+      var tot = 0, avail = 0, occ = 0;
+      blocks.forEach(function (b) { tot += b.total_slots; avail += b.available; occ += b.occupied; });
+      g('plv-summary').innerHTML =
+        stat(tot, 'Total slots') + stat(avail, 'Available') + stat(occ, 'Occupied') +
+        stat((data.sse_clients || 0), 'Live viewers');
+      g('plv-blocks').innerHTML = blocks.map(function (b) {
+        return '<div class="pk-panel"><div class="pk-panel-head"><h3>' + esc(b.name) +
+          ' <span class="pk-muted">' + b.available + ' free / ' + b.total_slots + '</span></h3></div>' +
+          '<div class="pk-slot-grid">' + (b.slots || []).map(function (s) {
+            var cls = 's-' + (s.color || 'grey');
+            var occ = (s.occupant_name || s.occupant_plate) ? '<span class="pk-occ">' + esc(s.occupant_name || s.occupant_plate) + '</span>' : '';
+            return '<div class="pk-slot ' + cls + '" title="' + esc(s.status) + (s.booking_code ? ' · ' + esc(s.booking_code) : '') + '">' +
+              '<span class="pk-slot-lbl">' + esc(s.label) + '</span>' +
+              '<span class="pk-slot-st">' + esc(STATUS_TEXT[s.status] || s.status) + '</span>' + occ + '</div>';
+          }).join('') + '</div></div>';
+      }).join('');
+    });
+  }
+  function stat(v, l) { return '<div class="pk-stat"><div class="pk-stat-v">' + v + '</div><div class="pk-stat-l">' + esc(l) + '</div></div>'; }
+
+  function plvInit() {
+    var btn = document.querySelector('.nav-item[data-view="park-live"]');
+    if (btn && !btn._pkw) { btn._pkw = 1; btn.addEventListener('click', plvEnter); }
+    if (!plvInit._poll) plvInit._poll = setInterval(function () { if (plvActive()) plvLoad(); }, 8000);
+    if (plvActive()) plvEnter();
+  }
+
+  // ═══════════════════════ 3) PARKING SETUP (admin) ════════════════════════════
+  var pst = { loc: null, locs: [] };
+  function pstActive() { var el = g('park-setup'); return el && el.classList.contains('active'); }
+
+  function pstEnter() {
+    if (!pstActive()) return;
+    jget('/api/admin/park/locations').then(function (rows) {
+      pst.locs = rows || [];
+      var row = g('pst-loc-row');
+      if (!pst.locs.length) { row.innerHTML = '<span class="pk-muted">No parking facilities yet. Create one under “Parking Facility”.</span>'; return; }
+      row.innerHTML = pst.locs.map(function (l) {
+        return '<button class="pk-chip' + (pst.loc === l.id ? ' on' : '') + '" data-loc="' + l.id + '">' +
+          esc(l.name) + ' <span class="pk-muted">(' + l.blocks + ' blk / ' + l.total_slots + ' slot)</span></button>';
+      }).join('');
+      row.querySelectorAll('[data-loc]').forEach(function (b) {
+        b.addEventListener('click', function () { pstSelect(parseInt(b.dataset.loc, 10)); });
+      });
+      if (pst.loc == null && pst.locs.length) pstSelect(pst.locs[0].id);
+      else if (pst.loc) pstLoad();
+    });
+  }
+
+  function pstSelect(id) {
+    pst.loc = id; g('pst-body').hidden = false;
+    document.querySelectorAll('#pst-loc-row .pk-chip').forEach(function (b) { b.classList.toggle('on', parseInt(b.dataset.loc, 10) === id); });
+    pstLoad();
+  }
+
+  function pstMsg(t, ok) { var el = g('pst-blk-msg'); el.textContent = t || ''; el.hidden = !t; el.className = 'pk-msg' + (ok ? ' ok' : ''); }
+
+  function pstAddBlock() {
+    var name = (g('pst-blk-name').value || '').trim();
+    var code = (g('pst-blk-code').value || '').trim();
+    var total = parseInt(g('pst-blk-total').value, 10) || 0;
+    var type = g('pst-blk-type').value;
+    if (!name) { pstMsg('Block name is required.'); return; }
+    g('pst-blk-add').disabled = true;
+    jsend('/api/admin/park/locations/' + pst.loc + '/blocks', 'POST',
+      { name: name, code: code, total_slots: total, slot_type: type }).then(function (res) {
+      g('pst-blk-add').disabled = false;
+      if (!res.ok || (res.d && res.d.status === 'error')) { pstMsg((res.d && res.d.message) || 'Could not create block.'); return; }
+      pstMsg('', true); g('pst-blk-name').value = ''; g('pst-blk-code').value = '';
+      toastFn('Block created with ' + total + ' slots.', 'ok'); pstEnter();
+    });
+  }
+
+  function pstLoad() {
+    if (!pst.loc) return;
+    jget('/api/admin/park/locations/' + pst.loc + '/blocks').then(function (blocks) {
+      var el = g('pst-blocks');
+      if (!blocks || !blocks.length) { el.innerHTML = '<div class="pk-empty">No blocks yet. Add one above.</div>'; return; }
+      el.innerHTML = blocks.map(function (b) {
+        return '<div class="pk-setup-block" data-block="' + b.id + '">' +
+          '<div class="pk-setup-block-head"><h3 style="margin:0">' + esc(b.name) +
+          ' <span class="pk-muted">(' + b.total_slots + ' slots · ' + b.available + ' free)</span></h3>' +
+          '<div class="pk-setup-actions">' +
+          '<button class="pk-btn pk-btn-sm" data-badd="' + b.id + '">+ Slot</button>' +
+          '<button class="pk-btn pk-btn-sm pk-btn-danger" data-bdel="' + b.id + '">Delete block</button></div></div>' +
+          '<div class="pk-slot-grid" id="pst-slots-' + b.id + '"><div class="pk-muted">loading…</div></div></div>';
+      }).join('');
+      blocks.forEach(function (b) { pstLoadSlots(b.id); });
+      el.querySelectorAll('[data-badd]').forEach(function (x) { x.addEventListener('click', function () { pstAddSlot(parseInt(x.dataset.badd, 10)); }); });
+      el.querySelectorAll('[data-bdel]').forEach(function (x) { x.addEventListener('click', function () { pstDelBlock(parseInt(x.dataset.bdel, 10)); }); });
+    });
+  }
+
+  function pstLoadSlots(bid) {
+    jget('/api/admin/park/blocks/' + bid + '/slots').then(function (slots) {
+      var el = g('pst-slots-' + bid); if (!el) return;
+      if (!slots.length) { el.innerHTML = '<div class="pk-muted">No slots.</div>'; return; }
+      el.innerHTML = slots.map(function (s) {
+        var cls = 's-' + (s.color || 'grey');
+        return '<div class="pk-slot ' + cls + '" data-sid="' + s.id + '" title="Click to manage ' + esc(s.label) + '">' +
+          '<span class="pk-slot-lbl">' + esc(s.label) + '</span>' +
+          '<span class="pk-slot-st">' + esc(STATUS_TEXT[s.status] || s.status) + '</span></div>';
+      }).join('');
+      el.querySelectorAll('[data-sid]').forEach(function (x) {
+        x.addEventListener('click', function () { pstSlotMenu(parseInt(x.dataset.sid, 10), bid); });
+      });
+    });
+  }
+
+  function pstSlotMenu(sid, bid) {
+    var choice = window.prompt('Manage slot — type one:\n  disable   (mark disabled)\n  unavail   (out of service)\n  enable    (make available)\n  release   (force-release live slot)\n  remove    (delete slot)\n');
+    if (!choice) return;
+    choice = choice.trim().toLowerCase();
+    var done = function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Action failed.', 'error'); return; }
+      toastFn('Done.', 'ok'); pstLoadSlots(bid); pstEnter();
+    };
+    if (choice === 'remove') { if (window.confirm('Delete this slot?')) jsend('/api/admin/park/slots/' + sid, 'DELETE').then(done); return; }
+    if (choice === 'release') { jsend('/api/admin/park/slots/' + sid + '/force-release', 'POST').then(done); return; }
+    var map = { disable: 'DISABLED', unavail: 'OUT_OF_SERVICE', enable: 'AVAILABLE' };
+    if (map[choice]) { jsend('/api/admin/park/slots/' + sid + '/status', 'POST', { status: map[choice] }).then(done); return; }
+    toastFn('Unknown option.', 'error');
+  }
+
+  function pstAddSlot(bid) {
+    var label = window.prompt('New slot label (blank = auto):', '');
+    if (label === null) return;
+    jsend('/api/admin/park/blocks/' + bid + '/slots', 'POST', { label: label.trim() }).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Could not add slot.', 'error'); return; }
+      toastFn('Slot added.', 'ok'); pstLoadSlots(bid); pstEnter();
+    });
+  }
+
+  function pstDelBlock(bid) {
+    if (!window.confirm('Delete this block and ALL its slots?')) return;
+    jsend('/api/admin/park/blocks/' + bid, 'DELETE').then(function () { toastFn('Block deleted.', 'ok'); pstEnter(); });
+  }
+
+  function pstInit() {
+    var add = g('pst-blk-add'); if (add && !add._pkw) { add._pkw = 1; add.addEventListener('click', pstAddBlock); }
+    var btn = document.querySelector('.nav-item[data-view="park-setup"]');
+    if (btn && !btn._pkw) { btn._pkw = 1; btn.addEventListener('click', pstEnter); }
+    if (pstActive()) pstEnter();
+  }
+
+  // ── boot all three + switchView chain ───────────────────────────────────────
+  function pkBoot() { pbkInit(); plvInit(); pstInit(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pkBoot);
+  else pkBoot();
+
+  if (typeof switchView === 'function') {
+    var _pkOrigSwitch = switchView;
+    switchView = function (n) {
+      _pkOrigSwitch(n);
+      if (n === 'park-book') pbkEnter();
+      else if (n === 'park-live') plvEnter();
+      else if (n === 'park-setup') pstEnter();
+    };
   }
 })();

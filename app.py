@@ -5994,6 +5994,19 @@ def api_park_slot(sid):
     return jsonify(s.to_dict(public=True))
 
 
+@app.route('/api/park/reservations/<int:rid>/qr.png')
+def api_park_reservation_qr(rid):
+    """PNG of the booking pass QR (encodes the signed /v/<token> URL). Public —
+    the token itself is the security, and the QR carries no PII."""
+    r = DriverReservation.query.get(rid)
+    if not r:
+        return jsonify({"error": "not found"}), 404
+    tok = r.qr_token or _make_pass_token('r', r.id)
+    png = _make_qr_png(_build_pass_url(tok))
+    return Response(png, mimetype='image/png',
+                    headers={'Cache-Control': 'public, max-age=300'})
+
+
 # ── User: booking lifecycle (all atomic in parking_core) ──────────────────────
 @app.route('/api/park/slots/<int:sid>/hold', methods=['POST'])
 @_driver_auth_required

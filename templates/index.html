@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260913-solmodal9">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-parking1">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -257,6 +257,16 @@
           <button class="nav-item" data-view="printer"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/></svg></span>Printer &amp; Ticketing</button>
           <button class="nav-item" data-view="reports"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M6 20v-7M11 20V5M16 20v-9"/></svg></span>Statistical Management</button>
           <button class="nav-item" data-view="video"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4z"/></svg></span>Video Monitoring</button>
+
+          <!-- Smart Parking — real-time slot reservation (expandable group) -->
+          <button class="nav-item nav-group" data-group="smart-parking" aria-expanded="false">
+            <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17V7h3.5a3 3 0 0 1 0 6H9"/></svg></span>Smart Parking<span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-sub" data-group-body="smart-parking">
+            <button class="nav-item nav-child" data-view="park-book"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h6M7 16h8"/></svg></span>Book Parking</button>
+            <button class="nav-item nav-child" data-view="park-live"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>Live Parking Dashboard</button>
+            <button class="nav-item nav-child" data-view="park-setup"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="4"/></svg></span>Parking Setup</button>
+          </div>
 
           <!-- Parking Inquiry — expandable group -->
           <button class="nav-item nav-group" data-group="parking-inquiry" aria-expanded="false">
@@ -2373,6 +2383,110 @@
             </form>
           </section>
         </section>
+
+        <!-- ══════════ SMART PARKING: Book Parking (driver self-service) ══════════ -->
+        <section id="park-book" class="view">
+          <!-- Driver login gate -->
+          <div id="pbk-login" class="pk-card pk-login">
+            <h2>Sign in to book parking</h2>
+            <p class="pk-muted">Book a real parking slot in real time. This is the driver experience — the same account works in the VayAccess mobile app.</p>
+            <div class="pk-field"><label>Email</label><input id="pbk-email" type="email" placeholder="you@example.com" autocomplete="username"></div>
+            <div class="pk-field"><label>Password</label><input id="pbk-pass" type="password" placeholder="••••••" autocomplete="current-password"></div>
+            <div class="pk-login-actions">
+              <button id="pbk-login-btn" class="pk-btn pk-btn-primary">Sign in</button>
+              <button id="pbk-reg-btn" class="pk-btn">Create account</button>
+            </div>
+            <div id="pbk-login-msg" class="pk-msg" hidden></div>
+          </div>
+
+          <!-- Booking app (shown once signed in) -->
+          <div id="pbk-app" hidden>
+            <div class="pk-topbar">
+              <div>Signed in as <strong id="pbk-who">—</strong> <span id="pbk-conn" class="pk-conn" title="Realtime connection">● offline</span></div>
+              <div class="pk-topbar-actions">
+                <label class="pk-switch"><input type="checkbox" id="pbk-sound" checked> Buzzer</label>
+                <button id="pbk-logout" class="pk-btn pk-btn-sm">Sign out</button>
+              </div>
+            </div>
+
+            <div id="pbk-mine"></div>
+
+            <div class="pk-panel">
+              <div class="pk-panel-head"><h3>Choose a location</h3></div>
+              <div id="pbk-loc-row" class="pk-chip-row"></div>
+            </div>
+
+            <div id="pbk-blockwrap" class="pk-panel" hidden>
+              <div class="pk-panel-head"><h3 id="pbk-block-title">Blocks</h3></div>
+              <div id="pbk-blocks" class="pk-block-grid"></div>
+            </div>
+
+            <div id="pbk-slotwrap" class="pk-panel" hidden>
+              <div class="pk-panel-head">
+                <h3 id="pbk-slot-title">Slots</h3>
+                <div class="pk-legend">
+                  <span><i class="pk-dot pk-green"></i>Available</span>
+                  <span><i class="pk-dot pk-yellow"></i>Held</span>
+                  <span><i class="pk-dot pk-red"></i>Reserved / Occupied</span>
+                  <span><i class="pk-dot pk-grey"></i>Disabled</span>
+                </div>
+              </div>
+              <div id="pbk-grid" class="pk-slot-grid"></div>
+              <div id="pbk-grid-empty" class="pk-empty" hidden>No slots in this block yet.</div>
+            </div>
+          </div>
+
+          <!-- Booking / OTP modal -->
+          <div id="pbk-modal" class="pk-modal-backdrop" hidden>
+            <div class="pk-modal" role="dialog" aria-modal="true" aria-labelledby="pbk-modal-title">
+              <div class="pk-modal-head"><h3 id="pbk-modal-title">Confirm slot</h3>
+                <button class="pk-modal-x" id="pbk-modal-close" type="button" aria-label="Close">&times;</button></div>
+              <div class="pk-modal-body" id="pbk-modal-body"></div>
+              <div class="pk-modal-foot" id="pbk-modal-foot"></div>
+              <div id="pbk-modal-msg" class="pk-msg" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ══════════ SMART PARKING: Live Dashboard (admin) ══════════ -->
+        <section id="park-live" class="view">
+          <div class="pk-panel">
+            <div class="pk-panel-head">
+              <h3>Live parking</h3>
+              <span id="plv-conn" class="pk-conn" title="Realtime connection">● offline</span>
+            </div>
+            <div id="plv-loc-row" class="pk-chip-row"></div>
+          </div>
+          <div id="plv-summary" class="pk-stat-row"></div>
+          <div id="plv-blocks"></div>
+          <div id="plv-empty" class="pk-empty" hidden>Pick a location above. Configure blocks &amp; slots in <b>Parking Setup</b> first.</div>
+        </section>
+
+        <!-- ══════════ SMART PARKING: Setup (admin CRUD) ══════════ -->
+        <section id="park-setup" class="view">
+          <div class="pk-panel">
+            <div class="pk-panel-head"><h3>Parking location</h3></div>
+            <div id="pst-loc-row" class="pk-chip-row"></div>
+            <p class="pk-muted" style="margin:8px 2px 0">Locations come from <b>Parking Facility</b>. Add blocks &amp; slots to a location here to make it bookable.</p>
+          </div>
+
+          <div id="pst-body" hidden>
+            <div class="pk-panel">
+              <div class="pk-panel-head"><h3>Add a block</h3></div>
+              <div class="pk-form-row">
+                <div class="pk-field"><label>Block name</label><input id="pst-blk-name" placeholder="Block A"></div>
+                <div class="pk-field pk-field-sm"><label>Label prefix</label><input id="pst-blk-code" placeholder="A"></div>
+                <div class="pk-field pk-field-sm"><label>Total slots</label><input id="pst-blk-total" type="number" min="0" value="10"></div>
+                <div class="pk-field pk-field-sm"><label>Slot type</label>
+                  <select id="pst-blk-type"><option value="standard">Standard</option><option value="ev">EV</option><option value="accessible">Accessible</option><option value="vip">VIP</option></select>
+                </div>
+                <button id="pst-blk-add" class="pk-btn pk-btn-primary">Create block + slots</button>
+              </div>
+              <div id="pst-blk-msg" class="pk-msg" hidden></div>
+            </div>
+            <div id="pst-blocks"></div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -2426,6 +2540,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260913-solmodal9"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-parking1"></script>
   </body>
 </html>
