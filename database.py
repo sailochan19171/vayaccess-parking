@@ -1207,6 +1207,33 @@ class CompanyAllocation(db.Model):
         }
 
 
+class Vehicle(db.Model):
+    """A vehicle owned by a driver/employee. A user may have several; one is
+    primary. New table -> db.create_all(). (added 2026-09-19)"""
+    __tablename__ = 'vehicles'
+    id           = db.Column(db.Integer, primary_key=True)
+    driver_id    = db.Column(db.Integer, nullable=False, index=True)
+    plate        = db.Column(db.String(50), nullable=False, index=True)
+    vehicle_type = db.Column(db.String(20), nullable=True, default='Car')  # Car / Bike
+    make         = db.Column(db.String(60), nullable=True)
+    model        = db.Column(db.String(60), nullable=True)
+    color        = db.Column(db.String(40), nullable=True)
+    is_primary   = db.Column(db.Boolean, default=False)
+    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('driver_id', 'plate', name='uq_vehicle_driver_plate'),)
+
+    def to_dict(self):
+        return {
+            "id":       self.id,
+            "plate":    self.plate,
+            "type":     self.vehicle_type or "Car",
+            "make":     self.make or "",
+            "model":    self.model or "",
+            "color":    self.color or "",
+            "is_primary": bool(self.is_primary),
+        }
+
+
 class LCDScreen(db.Model):
     __tablename__ = 'lcd_screens'
     id          = db.Column(db.Integer, primary_key=True)

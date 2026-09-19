@@ -15,7 +15,7 @@ from datetime import datetime
 
 from database import (
     db, Yard, Company, CompanyAllocation, DriverUser, ParkingBlock, ParkingSlot,
-    DriverReservation, AuditEvent, Setting,
+    DriverReservation, AuditEvent, Setting, Vehicle,
     SLOT_AVAILABLE,
 )
 import parking_core as park
@@ -115,9 +115,14 @@ def master_data(driver):
     slots = [s.to_dict(public=True) for s in
              sorted(my_slots, key=lambda s: (s.block_id, s.display_order or 0, s.label))]
 
-    vehicles = []
-    if driver.primary_plate:
-        vehicles.append({"plate": driver.primary_plate, "type": driver.primary_type or "Car"})
+    vrows = Vehicle.query.filter_by(driver_id=driver.id).order_by(Vehicle.is_primary.desc(), Vehicle.id).all()
+    if vrows:
+        vehicles = [v.to_dict() for v in vrows]
+    elif driver.primary_plate:
+        vehicles = [{"id": None, "plate": driver.primary_plate, "type": driver.primary_type or "Car",
+                     "make": "", "model": "", "color": "", "is_primary": True}]
+    else:
+        vehicles = []
 
     return {
         "user": driver.to_dict(),

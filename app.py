@@ -22,7 +22,7 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       DriverUser, DriverSession, DriverReservation,
                       DriverNotification, ImageBlob, PrintJob,
                       ParkingBlock, ParkingSlot, OtpVerification, SlotWatcher,
-                      DeviceToken, Company, CompanyAllocation,
+                      DeviceToken, Company, CompanyAllocation, Vehicle,
                       SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
                       SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
 import parking_core as park
@@ -6113,6 +6113,10 @@ def api_park_hold(sid):
         db.session.commit()
     except Exception:
         db.session.rollback()
+    try:
+        _ensure_vehicle(drv, plate, vtype)   # remember this vehicle for next time
+    except Exception:
+        db.session.rollback()
     AuditEvent.log(f"Slot held {slot.label} by driver {drv.id}", 'Parking')
     payload = _reservation_payload(r)
     payload['otp_dev'] = dev_code  # shown on-screen (no SMS provider yet)
@@ -6276,6 +6280,78 @@ def api_park_device_token():
         db.session.add(DeviceToken(driver_id=drv.id, token=tok, platform=plat, provider=prov))
     db.session.commit()
     return jsonify({"status": "ok"})
+
+
+# ── User: vehicles (multiple per user) ────────────────────────────────────────
+def _driver_vehicles(drv):
+    """A driver's vehicles from the Vehicle table, falling back to a synthesised
+    entry from primary_plate for legacy users with none registered."""
+    rows = Vehicle.query.filter_by(driver_id=drv.id).order_by(Vehicle.is_primary.desc(), Vehicle.id).all()
+    if rows:
+        return [v.to_dict() for v in rows]
+    if drv.primary_plate:
+        return [{"id": None, "plate": drv.primary_plate, "type": drv.primary_type or "Car",
+                 "make": "", "model": "", "color": "", "is_primary": True}]
+    return []
+
+
+def _ensure_vehicle(drv, plate, vtype=None):
+    """Auto-register a plate as a vehicle the first time it's used to book."""
+    plate = (plate or '').strip().upper()
+    if not plate:
+        return
+    if Vehicle.query.filter_by(driver_id=drv.id, plate=plate).first():
+        return
+    first = Vehicle.query.filter_by(driver_id=drv.id).count() == 0
+    db.session.add(Vehicle(driver_id=drv.id, plate=plate,
+                           vehicle_type=vtype or drv.primary_type or 'Car', is_primary=first))
+    db.session.commit()
+
+
+@app.route('/api/park/vehicles', methods=['GET', 'POST'])
+@_driver_auth_required
+def api_park_vehicles():
+    drv = request.driver
+    if request.method == 'POST':
+        d = request.get_json(silent=True) or {}
+        plate = (d.get('plate') or '').strip().upper()
+        if not plate:
+            return jsonify({"error": "Vehicle plate is required."}), 400
+        if Vehicle.query.filter_by(driver_id=drv.id, plate=plate).first():
+            return jsonify({"error": "You already have that vehicle."}), 409
+        vtype = (d.get('type') or d.get('vehicle_type') or 'Car').strip()
+        first = Vehicle.query.filter_by(driver_id=drv.id).count() == 0
+        v = Vehicle(driver_id=drv.id, plate=plate, vehicle_type=vtype,
+                    make=(d.get('make') or '').strip() or None,
+                    model=(d.get('model') or '').strip() or None,
+                    color=(d.get('color') or '').strip() or None,
+                    is_primary=bool(d.get('is_primary')) or first)
+        db.session.add(v)
+        db.session.commit()
+        return jsonify({"status": "ok", "vehicle": v.to_dict()})
+    return jsonify(_driver_vehicles(drv))
+
+
+@app.route('/api/park/vehicles/<int:vid>', methods=['PUT', 'DELETE'])
+@_driver_auth_required
+def api_park_vehicle(vid):
+    drv = request.driver
+    v = Vehicle.query.get(vid)
+    if not v or v.driver_id != drv.id:
+        return jsonify({"error": "vehicle not found"}), 404
+    if request.method == 'DELETE':
+        db.session.delete(v)
+        db.session.commit()
+        return jsonify({"status": "ok"})
+    d = request.get_json(silent=True) or {}
+    for fld, key in (('vehicle_type', 'type'), ('make', 'make'), ('model', 'model'), ('color', 'color')):
+        if key in d:
+            setattr(v, fld, (d.get(key) or '').strip() or None)
+    if d.get('is_primary'):
+        Vehicle.query.filter_by(driver_id=drv.id).update({'is_primary': False})
+        v.is_primary = True
+    db.session.commit()
+    return jsonify({"status": "ok", "vehicle": v.to_dict()})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
