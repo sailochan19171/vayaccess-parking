@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-admin3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-reports4">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -431,6 +431,21 @@
                 </div>
                 <label class="sol-field"><span>Location</span>
                   <input type="text" id="sol-f-location" placeholder="Address / landmark"></label>
+                <label class="sol-field"><span>Address</span>
+                  <input type="text" id="sol-f-address" placeholder="Street address"></label>
+                <div class="sol-row">
+                  <label class="sol-field"><span>City</span><input type="text" id="sol-f-city"></label>
+                  <label class="sol-field"><span>State</span><input type="text" id="sol-f-state"></label>
+                </div>
+                <div class="sol-row">
+                  <label class="sol-field"><span>Country</span><input type="text" id="sol-f-country"></label>
+                  <label class="sol-field"><span>Status</span>
+                    <select id="sol-f-status"><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+                </div>
+                <div class="sol-row">
+                  <label class="sol-field"><span>Latitude</span><input type="text" id="sol-f-lat" placeholder="17.4485"></label>
+                  <label class="sol-field"><span>Longitude</span><input type="text" id="sol-f-lng" placeholder="78.3908"></label>
+                </div>
                 <div class="sol-field"><span>Capabilities <small>(preset from the vertical &mdash; adjust as needed)</small></span>
                   <div class="sol-capgrid" id="sol-f-caps"></div>
                 </div>
@@ -2561,6 +2576,14 @@
             <div style="overflow-x:auto"><table class="data-table"><thead><tr>
               <th>Basement</th><th>Bookings</th><th>Entries</th><th>Exits</th><th>Total hours</th><th>Avg duration</th></tr></thead>
               <tbody id="prep-basement-body"></tbody></table></div></div>
+          <div class="pk-panel"><div class="pk-panel-head"><h3>Bookings by company</h3></div>
+            <div id="prep-chart-company" class="pk-chart"></div></div>
+          <div class="pk-panel"><div class="pk-panel-head"><h3>Parking utilization by basement</h3></div>
+            <div id="prep-chart-basement" class="pk-chart"></div></div>
+          <div class="pk-panel"><div class="pk-panel-head"><h3>Slot utilization</h3></div>
+            <div style="overflow-x:auto"><table class="data-table"><thead><tr>
+              <th>Slot</th><th>Bookings</th><th>Entries</th><th>Exits</th><th>Total hours</th><th>Avg duration</th><th>Utilization</th></tr></thead>
+              <tbody id="prep-slot-body"></tbody></table></div></div>
         </section>
       </main>
     </div>
@@ -2615,6 +2638,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-admin3"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-reports4"></script>
   </body>
 </html>

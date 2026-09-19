@@ -4471,6 +4471,14 @@ document.addEventListener('DOMContentLoaded', function () {
     solGet('sol-f-capacity').value = site ? (site.capacity || '') : '';
     solGet('sol-f-region').value = site ? (site.region || '') : '';
     solGet('sol-f-location').value = site ? (site.location || '') : '';
+    var setv = function (id, v) { var el = solGet(id); if (el) el.value = v; };
+    setv('sol-f-address', site ? (site.address || '') : '');
+    setv('sol-f-city',    site ? (site.city || '') : '');
+    setv('sol-f-state',   site ? (site.state || '') : '');
+    setv('sol-f-country', site ? (site.country || '') : '');
+    setv('sol-f-status',  site ? (site.status || 'active') : 'active');
+    setv('sol-f-lat', site && site.latitude != null ? site.latitude : '');
+    setv('sol-f-lng', site && site.longitude != null ? site.longitude : '');
     solPaintCapChecks(site ? site.caps : null);
     var err = solGet('sol-modal-err'); err.hidden = true; err.textContent = '';
     solGet('sol-modal').hidden = false;
@@ -4501,11 +4509,15 @@ document.addEventListener('DOMContentLoaded', function () {
       })[0];
       if (match) id = String(match.id);
     }
+    var gv = function (id) { var el = solGet(id); return el ? el.value.trim() : ''; };
     var payload = {
       name: name, site_type: type,
       capacity: parseInt(solGet('sol-f-capacity').value, 10) || 0,
       region: solGet('sol-f-region').value.trim(),
       location: solGet('sol-f-location').value.trim(),
+      address: gv('sol-f-address'), city: gv('sol-f-city'), state: gv('sol-f-state'),
+      country: gv('sol-f-country'), status: gv('sol-f-status') || 'active',
+      latitude: gv('sol-f-lat'), longitude: gv('sol-f-lng'),
       caps: solReadCaps()
     };
     var url = id ? '/api/yards/' + id : '/api/yards';
@@ -5660,10 +5672,30 @@ document.addEventListener('DOMContentLoaded', function () {
         stat(s.cancelled || 0, 'Cancelled') + stat(s.entries || 0, 'Entries') + stat(s.exits || 0, 'Exits') +
         stat(s.currently_parked || 0, 'Currently parked') + stat(s.total_hours || 0, 'Total hours');
       var rowHtml = function (x) { return '<tr><td><b>' + esc(x.name) + '</b></td><td>' + x.bookings + '</td><td>' + x.entries + '</td><td>' + x.exits + '</td><td>' + x.hours + '</td><td>' + (Math.floor(x.avg_minutes / 60) + 'h ' + (x.avg_minutes % 60) + 'm') + '</td></tr>'; };
-      var co = d.by_company || [], ba = d.by_basement || [];
+      var co = d.by_company || [], ba = d.by_basement || [], sl = d.by_slot || [];
       g('prep-company-body').innerHTML = co.length ? co.map(rowHtml).join('') : '<tr><td colspan="6" style="text-align:center;opacity:.6;padding:14px">No data</td></tr>';
       g('prep-basement-body').innerHTML = ba.length ? ba.map(rowHtml).join('') : '<tr><td colspan="6" style="text-align:center;opacity:.6;padding:14px">No data</td></tr>';
+      // charts (dependency-free CSS bars, real data)
+      bars(g('prep-chart-company'), co, function (x) { return x.bookings; }, function (x) { return x.name; });
+      bars(g('prep-chart-basement'), ba, function (x) { return x.hours; }, function (x) { return x.name; }, 'h');
+      // slot utilization table
+      g('prep-slot-body').innerHTML = sl.length ? sl.map(function (x) {
+        return '<tr><td><b>' + esc(x.name) + '</b></td><td>' + x.bookings + '</td><td>' + x.entries + '</td><td>' + x.exits +
+          '</td><td>' + x.hours + '</td><td>' + (Math.floor(x.avg_minutes / 60) + 'h ' + (x.avg_minutes % 60) + 'm') +
+          '</td><td>' + x.utilization + '%</td></tr>';
+      }).join('') : '<tr><td colspan="7" style="text-align:center;opacity:.6;padding:14px">No data</td></tr>';
     }).catch(function () {});
+  }
+  function bars(el, items, valueFn, labelFn, unit) {
+    if (!el) return;
+    if (!items || !items.length) { el.innerHTML = '<div class="pk-empty">No data available.</div>'; return; }
+    var max = Math.max.apply(null, items.map(valueFn).concat([1]));
+    el.innerHTML = items.slice(0, 12).map(function (x) {
+      var v = valueFn(x), pct = Math.round(v / max * 100);
+      return '<div class="pk-barrow"><span class="pk-barlbl">' + esc(labelFn(x)) + '</span>' +
+        '<span class="pk-bartrack"><i style="width:' + pct + '%"></i></span>' +
+        '<span class="pk-barval">' + v + (unit || '') + '</span></div>';
+    }).join('');
   }
   function prepEnter() { if (!active('park-reports')) return; if (!prepEnter._f) { prepEnter._f = 1; fillFilters('prep-loc', 'prep-company'); } prepRun(); }
   function prepInit() {

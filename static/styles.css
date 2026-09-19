@@ -2449,3 +2449,9 @@ td, th, .epc, code, .scan-row dd,
 .pk-mine-badge { display:inline-block; padding:2px 10px; border-radius:20px; background:rgba(255,255,255,.2); font-size:12px; font-weight:700; }
 @media (max-width:600px){ .pk-slot-grid { grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); } }
 .pk-badge { display:inline-block; padding:2px 9px; border-radius:20px; background:#eef2ff; color:#3b3f8a; font-size:11px; font-weight:700; }
+.pk-chart { display:flex; flex-direction:column; gap:8px; }
+.pk-barrow { display:flex; align-items:center; gap:10px; }
+.pk-barlbl { flex:0 0 140px; font-size:13px; color:#33445f; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pk-bartrack { flex:1; height:16px; background:#eef2f8; border-radius:8px; overflow:hidden; }
+.pk-bartrack > i { display:block; height:100%; background:linear-gradient(90deg,#2f6fed,#1c3faa); border-radius:8px; }
+.pk-barval { flex:0 0 54px; font-size:13px; font-weight:700; color:#22314d; }

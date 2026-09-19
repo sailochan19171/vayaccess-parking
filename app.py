@@ -4626,6 +4626,16 @@ def _apply_yard_solution(row, data):
         for k in _YARD_CAP_FIELDS:
             if k in caps:
                 setattr(row, f'cap_{k}', bool(caps.get(k)))
+    # Location detail fields (a Yard IS the "Location"). Only touch keys present.
+    for fld in ('address', 'city', 'state', 'country', 'status'):
+        if fld in data:
+            setattr(row, fld, (data.get(fld) or '').strip() or None)
+    for fld in ('latitude', 'longitude'):
+        if fld in data:
+            try:
+                row.__setattr__(fld, float(data.get(fld)) if str(data.get(fld)).strip() != '' else None)
+            except (TypeError, ValueError):
+                pass
 
 
 @app.route('/api/yards', methods=['GET', 'POST'])
@@ -6699,7 +6709,32 @@ def api_admin_reports():
         "by_company": bucket(lambda r: r.company_id, lambda r: r.company_name or 'Unassigned'),
         "by_basement": bucket(lambda r: r.block_id, lambda r: r.basement_name or '—'),
         "by_location": bucket(lambda r: r.location_id, lambda r: r.yard_name or '—'),
+        "by_slot": _slot_utilization(rows),
     })
+
+
+def _slot_utilization(rows):
+    """Per-slot: bookings, entries, exits, total hours, avg duration, and a
+    simple utilization% (share of bookings that actually resulted in an entry).
+    Capped to the busiest 100 slots."""
+    agg = {}
+    for r in rows:
+        if not r.slot_id:
+            continue
+        name = ("%s / %s" % (r.basement_name or '—', r.slot_label or '—'))
+        a = agg.setdefault(r.slot_id, {'name': name, 'bookings': 0, 'entries': 0,
+                                       'exits': 0, 'minutes': 0})
+        a['bookings'] += 1
+        a['entries'] += 1 if r.occupied_at else 0
+        a['exits'] += 1 if r.exited_at else 0
+        a['minutes'] += (r.duration_minutes() or 0)
+    out = []
+    for a in agg.values():
+        a['hours'] = round(a['minutes'] / 60, 1)
+        a['avg_minutes'] = round(a['minutes'] / a['bookings']) if a['bookings'] else 0
+        a['utilization'] = round(a['entries'] / a['bookings'] * 100) if a['bookings'] else 0
+        out.append(a)
+    return sorted(out, key=lambda x: -x['bookings'])[:100]
 
 
 # ── Mobile consolidated master data (per authenticated employee) ──────────────
