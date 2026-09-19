@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-users2">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260919-admin3">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -266,6 +266,9 @@
             <button class="nav-item nav-child" data-view="park-book"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h6M7 16h8"/></svg></span>Book Parking</button>
             <button class="nav-item nav-child" data-view="park-live"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>Live Parking Dashboard</button>
             <button class="nav-item nav-child" data-view="park-setup"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="4"/></svg></span>Parking Setup</button>
+            <button class="nav-item nav-child" data-view="park-companies"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M15 9h.01M9 13h.01M15 13h.01"/></svg></span>Companies &amp; Allocation</button>
+            <button class="nav-item nav-child" data-view="park-bookings"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></span>Parking Bookings</button>
+            <button class="nav-item nav-child" data-view="park-reports"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18M8 15l3-4 3 3 4-6"/></svg></span>Parking Reports</button>
           </div>
 
           <!-- Parking Inquiry — expandable group -->
@@ -2488,6 +2491,77 @@
             <div id="pst-blocks"></div>
           </div>
         </section>
+
+        <!-- ══════════ SMART PARKING: Companies & Allocation (admin) ══════════ -->
+        <section id="park-companies" class="view">
+          <div class="pk-panel">
+            <div class="pk-panel-head"><h3>Location</h3>
+              <button class="pk-btn pk-btn-primary pk-btn-sm" id="pcmp-add-co">+ Add Company</button>
+            </div>
+            <div id="pcmp-loc-row" class="pk-chip-row"></div>
+          </div>
+          <div id="pcmp-body" hidden>
+            <div class="pk-panel">
+              <div class="pk-panel-head"><h3 id="pcmp-co-title">Companies</h3></div>
+              <div id="pcmp-companies"></div>
+            </div>
+            <div id="pcmp-alloc" class="pk-panel" hidden>
+              <div class="pk-panel-head"><h3 id="pcmp-alloc-title">Slot allocation</h3>
+                <button class="pk-btn pk-btn-sm" id="pcmp-alloc-close">Close</button></div>
+              <p class="pk-muted" style="margin:0 0 10px">Set how many slots this company gets in each basement. Booked slots are never removed.</p>
+              <div id="pcmp-alloc-rows"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ══════════ SMART PARKING: Bookings (admin) ══════════ -->
+        <section id="park-bookings" class="view">
+          <div class="pk-panel">
+            <div class="pk-panel-head"><h3>Parking bookings</h3>
+              <button class="pk-btn pk-btn-sm" id="pbg-export">⬇ Export CSV</button></div>
+            <div class="pk-form-row">
+              <div class="pk-field pk-field-sm"><label>Location</label><select id="pbg-loc"></select></div>
+              <div class="pk-field pk-field-sm"><label>Company</label><select id="pbg-company"></select></div>
+              <div class="pk-field pk-field-sm"><label>Status</label>
+                <select id="pbg-status"><option value="">All</option><option>RESERVED</option><option>OCCUPIED</option><option>COMPLETED</option><option>CANCELLED</option><option>EXPIRED</option></select></div>
+              <div class="pk-field pk-field-sm"><label>From</label><input id="pbg-from" type="date"></div>
+              <div class="pk-field pk-field-sm"><label>To</label><input id="pbg-to" type="date"></div>
+              <div class="pk-field"><label>Search</label><input id="pbg-q" placeholder="plate / booking / employee / slot"></div>
+              <button class="pk-btn pk-btn-primary" id="pbg-apply">Apply</button>
+            </div>
+            <div id="pbg-meta" class="pk-muted" style="margin-bottom:8px"></div>
+            <div style="overflow-x:auto">
+              <table class="data-table"><thead><tr>
+                <th>Booking</th><th>Emp ID</th><th>User</th><th>Company</th><th>Location</th>
+                <th>Basement</th><th>Slot</th><th>Vehicle</th><th>Booked</th><th>Entry</th>
+                <th>Exit</th><th>Duration</th><th>Status</th></tr></thead>
+                <tbody id="pbg-body"></tbody></table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ══════════ SMART PARKING: Reports (admin) ══════════ -->
+        <section id="park-reports" class="view">
+          <div class="pk-panel">
+            <div class="pk-panel-head"><h3>Parking reports</h3></div>
+            <div class="pk-form-row">
+              <div class="pk-field pk-field-sm"><label>Location</label><select id="prep-loc"></select></div>
+              <div class="pk-field pk-field-sm"><label>Company</label><select id="prep-company"></select></div>
+              <div class="pk-field pk-field-sm"><label>From</label><input id="prep-from" type="date"></div>
+              <div class="pk-field pk-field-sm"><label>To</label><input id="prep-to" type="date"></div>
+              <button class="pk-btn pk-btn-primary" id="prep-apply">Run report</button>
+            </div>
+          </div>
+          <div id="prep-cards" class="pk-stat-row"></div>
+          <div class="pk-panel"><div class="pk-panel-head"><h3>By company</h3></div>
+            <div style="overflow-x:auto"><table class="data-table"><thead><tr>
+              <th>Company</th><th>Bookings</th><th>Entries</th><th>Exits</th><th>Total hours</th><th>Avg duration</th></tr></thead>
+              <tbody id="prep-company-body"></tbody></table></div></div>
+          <div class="pk-panel"><div class="pk-panel-head"><h3>By basement</h3></div>
+            <div style="overflow-x:auto"><table class="data-table"><thead><tr>
+              <th>Basement</th><th>Bookings</th><th>Entries</th><th>Exits</th><th>Total hours</th><th>Avg duration</th></tr></thead>
+              <tbody id="prep-basement-body"></tbody></table></div></div>
+        </section>
       </main>
     </div>
 
@@ -2541,6 +2615,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-users2"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260919-admin3"></script>
   </body>
 </html>

@@ -166,7 +166,8 @@ function switchView(name) {
     'audit-log': 'Audit Log',         'uhf-captures': 'UHF Captures',
     'driver-users': 'Driver Users (Mobile)',
     'park-book': 'Book Parking',      'park-live': 'Live Parking Dashboard',
-    'park-setup': 'Parking Setup',
+    'park-setup': 'Parking Setup',    'park-companies': 'Companies & Allocation',
+    'park-bookings': 'Parking Bookings', 'park-reports': 'Parking Reports',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
 }
@@ -5488,6 +5489,199 @@ document.addEventListener('DOMContentLoaded', function () {
       if (n === 'park-book') pbkEnter();
       else if (n === 'park-live') plvEnter();
       else if (n === 'park-setup') pstEnter();
+    };
+  }
+})();
+
+// ═══════════════ SMART PARKING ADMIN: Companies, Bookings, Reports ═══════════
+(function () {
+  var g = function (id) { return document.getElementById(id); };
+  var esc = window._esc || function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+  };
+  var toastFn = function (m, k) { if (typeof toast === 'function') toast(m, k || 'ok'); };
+  function aget(url) { return fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }); }
+  function asend(url, method, body) {
+    return fetch(url, { method: method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }).catch(function () { return { ok: r.ok, d: {} }; }); });
+  }
+  function active(id) { var el = g(id); return el && el.classList.contains('active'); }
+
+  // ── 1) COMPANIES & ALLOCATION ───────────────────────────────────────────────
+  var cmp = { loc: null, locs: [], co: null };
+  function pcmpEnter() {
+    if (!active('park-companies')) return;
+    aget('/api/admin/park/locations').then(function (rows) {
+      cmp.locs = rows || [];
+      var row = g('pcmp-loc-row');
+      if (!cmp.locs.length) { row.innerHTML = '<span class="pk-muted">No locations. Create one under Parking Facility, then add blocks in Parking Setup.</span>'; return; }
+      row.innerHTML = cmp.locs.map(function (l) {
+        return '<button class="pk-chip' + (cmp.loc === l.id ? ' on' : '') + '" data-loc="' + l.id + '">' + esc(l.name) + '</button>';
+      }).join('');
+      row.querySelectorAll('[data-loc]').forEach(function (b) { b.addEventListener('click', function () { pcmpSelectLoc(parseInt(b.dataset.loc, 10)); }); });
+      if (cmp.loc == null && cmp.locs.length) pcmpSelectLoc(cmp.locs[0].id); else if (cmp.loc) pcmpLoadCompanies();
+    }).catch(function () {});
+  }
+  function pcmpSelectLoc(id) {
+    cmp.loc = id; cmp.co = null; g('pcmp-body').hidden = false; g('pcmp-alloc').hidden = true;
+    document.querySelectorAll('#pcmp-loc-row .pk-chip').forEach(function (b) { b.classList.toggle('on', parseInt(b.dataset.loc, 10) === id); });
+    pcmpLoadCompanies();
+  }
+  function pcmpLoadCompanies() {
+    aget('/api/admin/companies?location=' + cmp.loc).then(function (rows) {
+      var el = g('pcmp-companies');
+      if (!rows.length) { el.innerHTML = '<div class="pk-empty">No companies yet. Use “+ Add Company”.</div>'; return; }
+      el.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Company</th><th>Employees</th><th>Allocated slots</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows.map(function (c) {
+          return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + c.employees + '</td><td>' + c.allocated_slots + '</td>' +
+            '<td>' + esc(c.status) + '</td><td style="white-space:nowrap">' +
+            '<button class="pk-btn pk-btn-sm" data-alloc="' + c.id + '" data-name="' + esc(c.name) + '">Allocation</button> ' +
+            '<button class="pk-btn pk-btn-sm" data-edit="' + c.id + '" data-name="' + esc(c.name) + '">Edit</button> ' +
+            '<button class="pk-btn pk-btn-sm pk-btn-danger" data-del="' + c.id + '">Delete</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
+      el.querySelectorAll('[data-alloc]').forEach(function (b) { b.addEventListener('click', function () { pcmpOpenAlloc(parseInt(b.dataset.alloc, 10), b.dataset.name); }); });
+      el.querySelectorAll('[data-edit]').forEach(function (b) { b.addEventListener('click', function () { pcmpEdit(parseInt(b.dataset.edit, 10), b.dataset.name); }); });
+      el.querySelectorAll('[data-del]').forEach(function (b) { b.addEventListener('click', function () { pcmpDelete(parseInt(b.dataset.del, 10)); }); });
+    });
+  }
+  function pcmpAddCompany() {
+    if (!cmp.loc) { toastFn('Pick a location first.', 'error'); return; }
+    var name = window.prompt('Company name:'); if (!name) return;
+    asend('/api/admin/companies', 'POST', { name: name, location_id: cmp.loc }).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
+      toastFn('Company added.'); pcmpLoadCompanies();
+    });
+  }
+  function pcmpEdit(id, name) {
+    var nm = window.prompt('Company name:', name); if (nm === null) return;
+    var st = window.prompt('Status (active / inactive):', 'active') || 'active';
+    asend('/api/admin/companies/' + id, 'PUT', { name: nm, status: st }).then(function () { toastFn('Saved.'); pcmpLoadCompanies(); });
+  }
+  function pcmpDelete(id) {
+    if (!window.confirm('Delete this company? Its slots are unassigned and employees unlinked; booking history is kept.')) return;
+    asend('/api/admin/companies/' + id, 'DELETE').then(function () { toastFn('Deleted.'); pcmpLoadCompanies(); });
+  }
+  function pcmpOpenAlloc(cid, name) {
+    cmp.co = cid; g('pcmp-alloc').hidden = false; g('pcmp-alloc-title').textContent = 'Slot allocation · ' + name;
+    Promise.all([aget('/api/admin/park/locations/' + cmp.loc + '/blocks'),
+                 aget('/api/admin/companies/' + cid + '/allocations')]).then(function (r) {
+      var blocks = (r[0] && r[0].blocks) || r[0] || [];
+      var allocs = {}; (r[1] || []).forEach(function (a) { allocs[a.block_id] = a; });
+      var el = g('pcmp-alloc-rows');
+      if (!blocks.length) { el.innerHTML = '<div class="pk-empty">No basements at this location. Add them in Parking Setup.</div>'; return; }
+      el.innerHTML = blocks.map(function (b) {
+        var a = allocs[b.id] || {};
+        return '<div class="pk-form-row" style="margin-bottom:8px"><div class="pk-field" style="flex:1"><label>' + esc(b.name) +
+          ' <span class="pk-muted">(' + b.total_slots + ' slots · ' + b.available + ' free)</span></label></div>' +
+          '<div class="pk-field pk-field-sm"><label>Allocate</label><input type="number" min="0" id="alloc-' + b.id + '" value="' + (a.allocated || 0) + '"></div>' +
+          '<button class="pk-btn pk-btn-primary" data-save="' + b.id + '">Save</button>' +
+          '<span class="pk-muted" id="alloc-msg-' + b.id + '" style="align-self:center"></span></div>';
+      }).join('');
+      el.querySelectorAll('[data-save]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var bid = parseInt(btn.dataset.save, 10);
+          var count = parseInt(g('alloc-' + bid).value, 10) || 0;
+          asend('/api/admin/companies/' + cid + '/allocate', 'POST', { block_id: bid, count: count }).then(function (res) {
+            if (!res.ok) { toastFn('Failed.', 'error'); return; }
+            g('alloc-msg-' + bid).textContent = 'Assigned ' + res.d.assigned + (res.d.warning ? ' · ' + res.d.warning : ' ✓');
+            toastFn('Allocation saved.'); pcmpLoadCompanies();
+          });
+        });
+      });
+    });
+  }
+  function pcmpInit() {
+    var add = g('pcmp-add-co'); if (add && !add._w) { add._w = 1; add.addEventListener('click', pcmpAddCompany); }
+    var cl = g('pcmp-alloc-close'); if (cl && !cl._w) { cl._w = 1; cl.addEventListener('click', function () { g('pcmp-alloc').hidden = true; }); }
+    var btn = document.querySelector('.nav-item[data-view="park-companies"]');
+    if (btn && !btn._w) { btn._w = 1; btn.addEventListener('click', pcmpEnter); }
+    if (active('park-companies')) pcmpEnter();
+  }
+
+  // ── shared: fill location + company selects ─────────────────────────────────
+  function fillFilters(locSel, coSel) {
+    aget('/api/admin/park/locations').then(function (locs) {
+      g(locSel).innerHTML = '<option value="">All locations</option>' + (locs || []).map(function (l) { return '<option value="' + l.id + '">' + esc(l.name) + '</option>'; }).join('');
+    });
+    aget('/api/admin/companies').then(function (cos) {
+      g(coSel).innerHTML = '<option value="">All companies</option>' + (cos || []).map(function (c) { return '<option value="' + c.id + '">' + esc(c.name) + '</option>'; }).join('');
+    });
+  }
+
+  // ── 2) BOOKINGS ─────────────────────────────────────────────────────────────
+  function pbgQuery() {
+    var p = [];
+    if (g('pbg-loc').value) p.push('location=' + g('pbg-loc').value);
+    if (g('pbg-company').value) p.push('company=' + g('pbg-company').value);
+    if (g('pbg-status').value) p.push('status=' + g('pbg-status').value);
+    if (g('pbg-from').value) p.push('from=' + g('pbg-from').value);
+    if (g('pbg-to').value) p.push('to=' + g('pbg-to').value);
+    if (g('pbg-q').value.trim()) p.push('q=' + encodeURIComponent(g('pbg-q').value.trim()));
+    return p.join('&');
+  }
+  function pbgLoad() {
+    aget('/api/admin/park/bookings?' + pbgQuery()).then(function (data) {
+      g('pbg-meta').textContent = (data.count || 0) + ' booking(s)';
+      var rows = data.rows || [];
+      g('pbg-body').innerHTML = rows.length ? rows.map(function (r) {
+        return '<tr><td>' + esc(r.booking_code) + '</td><td>' + esc(r.employee_id) + '</td><td>' + esc(r.user_name) + '</td>' +
+          '<td>' + esc(r.company_name) + '</td><td>' + esc(r.yard) + '</td><td>' + esc(r.basement_name) + '</td>' +
+          '<td>' + esc(r.slot_label) + '</td><td>' + esc(r.vehicle_plate) + '</td><td>' + esc(r.start_at) + '</td>' +
+          '<td>' + esc(r.occupied_at) + '</td><td>' + esc(r.exited_at) + '</td><td>' + esc(r.duration) + '</td>' +
+          '<td><span class="pk-badge">' + esc(r.state) + '</span></td></tr>';
+      }).join('') : '<tr><td colspan="13" style="text-align:center;opacity:.6;padding:18px">No bookings match.</td></tr>';
+    }).catch(function () { g('pbg-body').innerHTML = '<tr><td colspan="13" style="text-align:center;color:#b74a42">Failed to load.</td></tr>'; });
+  }
+  function pbgEnter() { if (!active('park-bookings')) return; if (!pbgEnter._f) { pbgEnter._f = 1; fillFilters('pbg-loc', 'pbg-company'); } pbgLoad(); }
+  function pbgInit() {
+    var ap = g('pbg-apply'); if (ap && !ap._w) { ap._w = 1; ap.addEventListener('click', pbgLoad); }
+    var ex = g('pbg-export'); if (ex && !ex._w) { ex._w = 1; ex.addEventListener('click', function () { window.open('/api/admin/park/bookings.csv?' + pbgQuery(), '_blank'); }); }
+    var btn = document.querySelector('.nav-item[data-view="park-bookings"]');
+    if (btn && !btn._w) { btn._w = 1; btn.addEventListener('click', pbgEnter); }
+    if (active('park-bookings')) pbgEnter();
+  }
+
+  // ── 3) REPORTS ──────────────────────────────────────────────────────────────
+  function prepQuery() {
+    var p = [];
+    if (g('prep-loc').value) p.push('location=' + g('prep-loc').value);
+    if (g('prep-company').value) p.push('company=' + g('prep-company').value);
+    if (g('prep-from').value) p.push('from=' + g('prep-from').value);
+    if (g('prep-to').value) p.push('to=' + g('prep-to').value);
+    return p.join('&');
+  }
+  function stat(v, l) { return '<div class="pk-stat"><div class="pk-stat-v">' + v + '</div><div class="pk-stat-l">' + esc(l) + '</div></div>'; }
+  function prepRun() {
+    aget('/api/admin/reports?' + prepQuery()).then(function (d) {
+      var s = d.summary || {};
+      g('prep-cards').innerHTML = stat(s.total_bookings || 0, 'Total bookings') + stat(s.confirmed || 0, 'Confirmed') +
+        stat(s.cancelled || 0, 'Cancelled') + stat(s.entries || 0, 'Entries') + stat(s.exits || 0, 'Exits') +
+        stat(s.currently_parked || 0, 'Currently parked') + stat(s.total_hours || 0, 'Total hours');
+      var rowHtml = function (x) { return '<tr><td><b>' + esc(x.name) + '</b></td><td>' + x.bookings + '</td><td>' + x.entries + '</td><td>' + x.exits + '</td><td>' + x.hours + '</td><td>' + (Math.floor(x.avg_minutes / 60) + 'h ' + (x.avg_minutes % 60) + 'm') + '</td></tr>'; };
+      var co = d.by_company || [], ba = d.by_basement || [];
+      g('prep-company-body').innerHTML = co.length ? co.map(rowHtml).join('') : '<tr><td colspan="6" style="text-align:center;opacity:.6;padding:14px">No data</td></tr>';
+      g('prep-basement-body').innerHTML = ba.length ? ba.map(rowHtml).join('') : '<tr><td colspan="6" style="text-align:center;opacity:.6;padding:14px">No data</td></tr>';
+    }).catch(function () {});
+  }
+  function prepEnter() { if (!active('park-reports')) return; if (!prepEnter._f) { prepEnter._f = 1; fillFilters('prep-loc', 'prep-company'); } prepRun(); }
+  function prepInit() {
+    var ap = g('prep-apply'); if (ap && !ap._w) { ap._w = 1; ap.addEventListener('click', prepRun); }
+    var btn = document.querySelector('.nav-item[data-view="park-reports"]');
+    if (btn && !btn._w) { btn._w = 1; btn.addEventListener('click', prepEnter); }
+    if (active('park-reports')) prepEnter();
+  }
+
+  function boot() { pcmpInit(); pbgInit(); prepInit(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  if (typeof switchView === 'function') {
+    var _orig = switchView;
+    switchView = function (n) {
+      _orig(n);
+      if (n === 'park-companies') pcmpEnter();
+      else if (n === 'park-bookings') pbgEnter();
+      else if (n === 'park-reports') prepEnter();
     };
   }
 })();

@@ -6514,6 +6514,157 @@ def api_admin_company_allocations(cid):
     return jsonify([r.to_dict() for r in rows])
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ADMIN: bookings view, dashboard stats, reports, CSV export (real DB data)
+# ═════════════════════════════════════════════════════════════════════════════
+def _bookings_query():
+    """Build a filtered DriverReservation query from request args.
+    Uses booking snapshots so historical rows stay correct after config edits."""
+    q = DriverReservation.query
+    loc = request.args.get('location', type=int)
+    comp = request.args.get('company', type=int)
+    base = request.args.get('basement', type=int)
+    state = (request.args.get('status') or '').strip().upper()
+    text_q = (request.args.get('q') or '').strip()
+    date_from = (request.args.get('from') or '').strip()
+    date_to = (request.args.get('to') or '').strip()
+    if loc:  q = q.filter(DriverReservation.location_id == loc)
+    if comp: q = q.filter(DriverReservation.company_id == comp)
+    if base: q = q.filter(DriverReservation.block_id == base)
+    if state: q = q.filter(DriverReservation.state == state)
+    if text_q:
+        like = f"%{text_q}%"
+        q = q.filter(db.or_(DriverReservation.vehicle_plate.ilike(like),
+                            DriverReservation.booking_code.ilike(like),
+                            DriverReservation.employee_id.ilike(like),
+                            DriverReservation.slot_label.ilike(like)))
+    from datetime import datetime as _dt
+    def _parse(d):
+        try: return _dt.strptime(d, "%Y-%m-%d")
+        except ValueError: return None
+    df, dt2 = _parse(date_from), _parse(date_to)
+    if df: q = q.filter(DriverReservation.start_at >= df)
+    if dt2: q = q.filter(DriverReservation.start_at < (dt2 + timedelta(days=1)))
+    return q.order_by(DriverReservation.id.desc())
+
+
+def _booking_row(r, names):
+    d = r.to_dict()
+    d['user_name'] = names.get(r.driver_id, '')
+    return d
+
+
+@app.route('/api/admin/park/bookings')
+@admin_required
+def api_admin_park_bookings():
+    q = _bookings_query()
+    total = q.count()
+    limit = min(500, request.args.get('limit', default=100, type=int))
+    offset = request.args.get('offset', default=0, type=int)
+    rows = q.limit(limit).offset(offset).all()
+    ids = {r.driver_id for r in rows}
+    names = {u.id: u.name for u in DriverUser.query.filter(DriverUser.id.in_(ids)).all()} if ids else {}
+    return jsonify({"count": total, "rows": [_booking_row(r, names) for r in rows]})
+
+
+@app.route('/api/admin/park/bookings.csv')
+@admin_required
+def api_admin_park_bookings_csv():
+    import csv, io as _io
+    rows = _bookings_query().limit(5000).all()
+    ids = {r.driver_id for r in rows}
+    names = {u.id: u.name for u in DriverUser.query.filter(DriverUser.id.in_(ids)).all()} if ids else {}
+    buf = _io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['Booking ID', 'Employee ID', 'User Name', 'Company', 'Location',
+                'Basement', 'Slot', 'Vehicle Number', 'Booking Date', 'Entry Time',
+                'Exit Time', 'Duration', 'Status'])
+    for r in rows:
+        d = r.to_dict()
+        w.writerow([d['booking_code'], d['employee_id'], names.get(r.driver_id, ''),
+                    d['company_name'], d['yard'], d['basement_name'], d['slot_label'],
+                    d['vehicle_plate'], d['start_at'], d['occupied_at'], d['exited_at'],
+                    d['duration'], d['state']])
+    return Response(buf.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': 'attachment; filename=parking_bookings.csv'})
+
+
+@app.route('/api/admin/park/stats')
+@admin_required
+def api_admin_park_stats():
+    from datetime import datetime as _dt
+    today = _dt.utcnow().date()
+    slots = ParkingSlot.query.all()
+    allocated = sum(1 for s in slots if s.company_id)
+    occupied = sum(1 for s in slots if s.status in (SLOT_RESERVED, SLOT_OCCUPIED, SLOT_HELD))
+    active_states = DriverReservation.ACTIVE_STATES
+    today_bookings = (DriverReservation.query
+                      .filter(db.func.date(DriverReservation.start_at) == today).count())
+    parked = DriverReservation.query.filter(DriverReservation.state == SLOT_OCCUPIED).count()
+    completed_today = (DriverReservation.query
+                       .filter(DriverReservation.state == 'COMPLETED',
+                               db.func.date(DriverReservation.completed_at) == today).count())
+    return jsonify({
+        "locations": Yard.query.count(),
+        "companies": Company.query.count(),
+        "users": DriverUser.query.count(),
+        "basements": ParkingBlock.query.count(),
+        "slots": len(slots),
+        "allocated_slots": allocated,
+        "available_slots": sum(1 for s in slots if s.status == SLOT_AVAILABLE),
+        "occupied_slots": occupied,
+        "today_bookings": today_bookings,
+        "currently_parked": parked,
+        "today_completed": completed_today,
+    })
+
+
+@app.route('/api/admin/reports')
+@admin_required
+def api_admin_reports():
+    """Aggregated reports from real booking data, honouring the same filters."""
+    rows = _bookings_query().limit(20000).all()
+    def mins(r):
+        m = r.duration_minutes()
+        return m or 0
+    # daily/overall summary
+    total = len(rows)
+    confirmed = sum(1 for r in rows if r.state in ('RESERVED', 'OCCUPIED', 'COMPLETED'))
+    cancelled = sum(1 for r in rows if r.state == 'CANCELLED')
+    expired = sum(1 for r in rows if r.state == 'EXPIRED')
+    entries = sum(1 for r in rows if r.occupied_at)
+    exits = sum(1 for r in rows if r.exited_at)
+    parked = sum(1 for r in rows if r.state == SLOT_OCCUPIED)
+    total_minutes = sum(mins(r) for r in rows)
+    # by company / basement
+    def bucket(key_fn, name_fn):
+        agg = {}
+        for r in rows:
+            k = key_fn(r)
+            if k is None: continue
+            a = agg.setdefault(k, {'name': name_fn(r), 'bookings': 0, 'entries': 0,
+                                   'exits': 0, 'minutes': 0})
+            a['bookings'] += 1
+            a['entries'] += 1 if r.occupied_at else 0
+            a['exits'] += 1 if r.exited_at else 0
+            a['minutes'] += mins(r)
+        for a in agg.values():
+            a['hours'] = round(a['minutes'] / 60, 1)
+            a['avg_minutes'] = round(a['minutes'] / a['bookings']) if a['bookings'] else 0
+        return sorted(agg.values(), key=lambda x: -x['bookings'])
+    return jsonify({
+        "summary": {
+            "total_bookings": total, "confirmed": confirmed, "cancelled": cancelled,
+            "expired": expired, "entries": entries, "exits": exits,
+            "currently_parked": parked, "total_hours": round(total_minutes / 60, 1),
+            "avg_minutes": round(total_minutes / total) if total else 0,
+        },
+        "by_company": bucket(lambda r: r.company_id, lambda r: r.company_name or 'Unassigned'),
+        "by_basement": bucket(lambda r: r.block_id, lambda r: r.basement_name or '—'),
+        "by_location": bucket(lambda r: r.location_id, lambda r: r.yard_name or '—'),
+    })
+
+
 # ── Mobile consolidated master data (per authenticated employee) ──────────────
 @app.route('/api/mobile/master-data')
 @_driver_auth_required
