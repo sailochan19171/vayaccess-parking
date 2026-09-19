@@ -156,12 +156,34 @@ def migrate_schema(engine):
         ("cap_payments", "BOOLEAN"),
         ("cap_visitor",  "BOOLEAN"),
         ("cap_access",   "BOOLEAN"),
+        ("address",      "VARCHAR(300)"),
+        ("city",         "VARCHAR(120)"),
+        ("state",        "VARCHAR(120)"),
+        ("country",      "VARCHAR(120)"),
+        ("latitude",     "DOUBLE PRECISION"),
+        ("longitude",    "DOUBLE PRECISION"),
+        ("status",       "VARCHAR(20)"),
+    ]
+    # Org/tenancy columns on driver users (employees) + parking slots.
+    driver_users_new = [
+        ("company_id",  "INTEGER"),
+        ("location_id", "INTEGER"),
+        ("employee_id", "VARCHAR(40)"),
+        ("role",        "VARCHAR(30)"),
+        ("status",      "VARCHAR(20)"),
+    ]
+    parking_slots_new = [
+        ("company_id",  "INTEGER"),
     ]
     # Structured slot link + real-time lifecycle on driver reservations.
     driver_reservations_new = [
         ("slot_id",         "INTEGER"),
         ("block_id",        "INTEGER"),
         ("location_id",     "INTEGER"),
+        ("company_id",      "INTEGER"),
+        ("company_name",    "VARCHAR(120)"),
+        ("basement_name",   "VARCHAR(80)"),
+        ("employee_id",     "VARCHAR(40)"),
         ("booking_code",    "VARCHAR(30)"),
         ("state",           "VARCHAR(20)"),
         ("held_until",      "TIMESTAMP"),
@@ -195,6 +217,8 @@ def migrate_schema(engine):
                             ('accounts',    accounts_new),
                             ('parking_transactions', parking_transactions_new),
                             ('yards',       yards_new),
+                            ('driver_users',          driver_users_new),
+                            ('parking_slots',         parking_slots_new),
                             ('driver_reservations',   driver_reservations_new),
                             ('driver_notifications',  driver_notifications_new)):
             existing = _existing_cols(conn, table)
@@ -508,6 +532,14 @@ class Yard(db.Model):
     cap_payments = db.Column(db.Boolean, default=False)
     cap_visitor  = db.Column(db.Boolean, default=False)
     cap_access   = db.Column(db.Boolean, default=False)
+    # ── Location detail fields (added 2026-09-19) — Yard IS the "Location" ─────
+    address   = db.Column(db.String(300), nullable=True)
+    city      = db.Column(db.String(120), nullable=True)
+    state     = db.Column(db.String(120), nullable=True)
+    country   = db.Column(db.String(120), nullable=True)
+    latitude  = db.Column(db.Float, nullable=True)
+    longitude = db.Column(db.Float, nullable=True)
+    status    = db.Column(db.String(20), nullable=True, default='active')  # active / inactive
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def occupied(self):
@@ -528,6 +560,13 @@ class Yard(db.Model):
             "location":  self.location or "",
             "region":    self.region or "",
             "site_type": self.site_type or "",
+            "address":   self.address or "",
+            "city":      self.city or "",
+            "state":     self.state or "",
+            "country":   self.country or "",
+            "latitude":  self.latitude,
+            "longitude": self.longitude,
+            "status":    self.status or "active",
             "caps": {
                 "anpr":     bool(self.cap_anpr),
                 "rfid":     bool(self.cap_rfid),
@@ -726,6 +765,15 @@ class DriverUser(db.Model):
     primary_type  = db.Column(db.String(20),  nullable=True, default='Car')
     fastag_id     = db.Column(db.String(40),  nullable=True)
     created_at    = db.Column(db.DateTime,    default=datetime.utcnow)
+    # ── Org / tenancy (added 2026-09-19) ──────────────────────────────────────
+    # An "employee" is a DriverUser linked to a Company at a Location. Legacy
+    # self-service drivers leave these NULL and keep working unchanged. Rolled
+    # onto existing DBs by migrate_schema (driver_users_new).
+    company_id    = db.Column(db.Integer, nullable=True, index=True)   # -> companies.id
+    location_id   = db.Column(db.Integer, nullable=True, index=True)   # -> yards.id (denormalised from company)
+    employee_id   = db.Column(db.String(40), nullable=True, index=True)  # HR/employee code, e.g. EMP1001
+    role          = db.Column(db.String(30), nullable=True, default='employee')  # employee / company_admin
+    status        = db.Column(db.String(20), nullable=True, default='active')    # active / inactive
 
     def set_password(self, raw):
         if raw:
@@ -743,6 +791,11 @@ class DriverUser(db.Model):
             "primary_plate": self.primary_plate or "",
             "primary_type":  self.primary_type  or "Car",
             "fastag_id":     self.fastag_id     or "",
+            "company_id":    self.company_id,
+            "location_id":   self.location_id,
+            "employee_id":   self.employee_id or "",
+            "role":          self.role or "employee",
+            "status":        self.status or "active",
             "created_at":    to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
         }
 
@@ -793,6 +846,12 @@ class DriverReservation(db.Model):
     slot_id         = db.Column(db.Integer,     nullable=True, index=True)   # -> parking_slots.id
     block_id        = db.Column(db.Integer,     nullable=True)               # -> parking_blocks.id
     location_id     = db.Column(db.Integer,     nullable=True, index=True)   # -> yards.id
+    company_id      = db.Column(db.Integer,     nullable=True, index=True)   # -> companies.id
+    # Denormalised snapshots so historical reports stay correct even if the
+    # company/basement is later renamed or re-allocated (spec 26). Added 2026-09-19.
+    company_name    = db.Column(db.String(120), nullable=True)
+    basement_name   = db.Column(db.String(80),  nullable=True)
+    employee_id     = db.Column(db.String(40),  nullable=True)
     booking_code    = db.Column(db.String(30),  nullable=True, index=True)   # PK-2026-000123
     state           = db.Column(db.String(20),  nullable=False, default='RESERVED')  # see class docstring
     held_until      = db.Column(db.DateTime,    nullable=True)   # HELD/OTP_PENDING auto-expire deadline
@@ -807,6 +866,22 @@ class DriverReservation(db.Model):
     # states that count as an ACTIVE hold on a slot (block re-booking)
     ACTIVE_STATES = ('HELD', 'OTP_PENDING', 'RESERVED', 'OCCUPIED', 'EXIT_PENDING')
 
+    def duration_minutes(self):
+        """Backend-authoritative parking duration in whole minutes.
+        entry = occupied_at, exit = exited_at. Running total while still parked;
+        None if never entered. Handles same-day + overnight (plain UTC delta)."""
+        if not self.occupied_at:
+            return None
+        end = self.exited_at or datetime.utcnow()
+        secs = (end - self.occupied_at).total_seconds()
+        return int(max(0, secs) // 60)
+
+    @staticmethod
+    def fmt_duration(mins):
+        if mins is None:
+            return ""
+        return "%dh %02dm" % (mins // 60, mins % 60)
+
     def to_dict(self):
         return {
             "id":             self.id,
@@ -814,6 +889,10 @@ class DriverReservation(db.Model):
             "location_id":    self.location_id,
             "block_id":       self.block_id,
             "slot_id":        self.slot_id,
+            "company_id":     self.company_id,
+            "company_name":   self.company_name or "",
+            "basement_name":  self.basement_name or "",
+            "employee_id":    self.employee_id or "",
             "vehicle_plate":  self.vehicle_plate,
             "vehicle_type":   self.vehicle_type,
             "slot_label":     self.slot_label or "",
@@ -826,6 +905,8 @@ class DriverReservation(db.Model):
             "grace_until":    to_ist(self.grace_until, "%Y-%m-%d %H:%M:%S") or "",
             "occupied_at":    to_ist(self.occupied_at, "%Y-%m-%d %H:%M") or "",
             "exited_at":      to_ist(self.exited_at, "%Y-%m-%d %H:%M") or "",
+            "duration_minutes": self.duration_minutes(),
+            "duration":       self.fmt_duration(self.duration_minutes()),
             "amount":         self.amount or 0,
             "payment_method": self.payment_method or "",
             "transaction_id": self.transaction_id or "",
@@ -933,6 +1014,10 @@ class ParkingSlot(db.Model):
     status         = db.Column(db.String(20),  nullable=False, default=SLOT_AVAILABLE, index=True)
     slot_type      = db.Column(db.String(20),  nullable=True, default='standard')  # standard/ev/accessible/vip
     display_order  = db.Column(db.Integer,     default=0)
+    # Company allocation (added 2026-09-19): which company this slot is allocated
+    # to. NULL = unallocated (visible to legacy self-service drivers). Employees
+    # see only slots where company_id == their company_id.
+    company_id     = db.Column(db.Integer,     nullable=True, index=True)
     # live-occupancy bookkeeping
     held_by        = db.Column(db.Integer,     nullable=True)   # driver_id currently holding
     held_until     = db.Column(db.DateTime,    nullable=True)   # hold auto-expiry
@@ -967,6 +1052,7 @@ class ParkingSlot(db.Model):
             "display_order": self.display_order or 0,
             "bookable":      self.is_bookable,
             "version":       self.version or 0,
+            "company_id":    self.company_id,
         }
         if not public:
             d.update(
@@ -1056,6 +1142,68 @@ class DeviceToken(db.Model):
             "platform":  self.platform or "",
             "provider":  self.provider or "fcm",
             "last_seen": to_ist(self.last_seen, "%Y-%m-%d %H:%M") or "",
+        }
+
+
+# ── Org / tenancy: Company + Company slot allocation (added 2026-09-19) ───────
+# A Company belongs to one Location (Yard). Employees (DriverUser.company_id)
+# belong to a Company. Slots are allocated to a company via ParkingSlot.company_id;
+# CompanyAllocation records the configured target count per (company, basement)
+# for reporting + safe increase/decrease. New tables -> db.create_all().
+class Company(db.Model):
+    __tablename__ = 'companies'
+    id         = db.Column(db.Integer, primary_key=True)
+    yard_id    = db.Column(db.Integer, db.ForeignKey('yards.id'), nullable=False, index=True)  # location
+    name       = db.Column(db.String(120), nullable=False)
+    code       = db.Column(db.String(30),  nullable=True)
+    status     = db.Column(db.String(20),  nullable=True, default='active')  # active / inactive
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def employee_count(self):
+        return DriverUser.query.filter_by(company_id=self.id).count()
+
+    def allocated_count(self):
+        return ParkingSlot.query.filter_by(company_id=self.id).count()
+
+    def to_dict(self, with_counts=True):
+        d = {
+            "id":          self.id,
+            "location_id": self.yard_id,
+            "name":        self.name,
+            "code":        self.code or "",
+            "status":      self.status or "active",
+            "created_at":  to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
+        }
+        if with_counts:
+            d["employees"] = self.employee_count()
+            d["allocated_slots"] = self.allocated_count()
+        return d
+
+
+class CompanyAllocation(db.Model):
+    __tablename__ = 'company_parking_allocations'
+    id             = db.Column(db.Integer, primary_key=True)
+    company_id     = db.Column(db.Integer, db.ForeignKey('companies.id'), nullable=False, index=True)
+    block_id       = db.Column(db.Integer, db.ForeignKey('parking_blocks.id'), nullable=False, index=True)  # basement
+    yard_id        = db.Column(db.Integer, index=True)   # location, denormalised
+    allocated_count= db.Column(db.Integer, nullable=False, default=0)  # target capacity
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('company_id', 'block_id', name='uq_alloc_company_block'),)
+
+    def assigned_now(self):
+        """How many physical slots are actually assigned to this company in this block."""
+        return ParkingSlot.query.filter_by(company_id=self.company_id, block_id=self.block_id).count()
+
+    def to_dict(self):
+        return {
+            "id":            self.id,
+            "company_id":    self.company_id,
+            "block_id":      self.block_id,
+            "location_id":   self.yard_id,
+            "allocated":     self.allocated_count,
+            "assigned":      self.assigned_now(),
+            "updated_at":    to_ist(self.updated_at, "%Y-%m-%d %H:%M") or "",
         }
 
 

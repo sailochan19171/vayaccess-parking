@@ -22,10 +22,11 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       DriverUser, DriverSession, DriverReservation,
                       DriverNotification, ImageBlob, PrintJob,
                       ParkingBlock, ParkingSlot, OtpVerification, SlotWatcher,
-                      DeviceToken,
+                      DeviceToken, Company, CompanyAllocation,
                       SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
                       SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
 import parking_core as park
+import company_core as company
 import fcm_push
 from api_integration import clean_plate_number
 from sqlalchemy import or_
@@ -6030,6 +6031,20 @@ def api_park_hold(sid):
     slot = ParkingSlot.query.get(sid)
     if not slot:
         return jsonify({"error": "slot not found"}), 404
+    # Company scope: an employee may only book a slot allocated to their company
+    # (server-side authorization — cannot be bypassed by changing the slot id).
+    if not company.can_book(drv, slot):
+        return jsonify({"error": "This slot is not available to your company.",
+                        "code": "not_allocated"}), 403
+    # Inactive company / employee cannot create new bookings (spec 15).
+    if getattr(drv, 'company_id', None):
+        _co = db.session.get(Company, drv.company_id)
+        if _co and (_co.status or 'active') != 'active':
+            return jsonify({"error": "Your company's parking is currently inactive.",
+                            "code": "company_inactive"}), 403
+    if (getattr(drv, 'status', None) or 'active') != 'active':
+        return jsonify({"error": "Your account is inactive. Contact your admin.",
+                        "code": "user_inactive"}), 403
     hours = data.get('hours')
     try:
         hours = int(hours) if hours else None
@@ -6038,6 +6053,19 @@ def api_park_hold(sid):
     r, dev_code, err = park.hold_slot(sid, drv, plate, vtype, hours)
     if err:
         return _park_err(err)
+    # Snapshot company/basement/employee onto the booking so historical reports
+    # stay correct even if config later changes (spec 26).
+    try:
+        r.company_id = slot.company_id or drv.company_id
+        if r.company_id:
+            _co = db.session.get(Company, r.company_id)
+            r.company_name = _co.name if _co else None
+        _blk = db.session.get(ParkingBlock, slot.block_id) if slot.block_id else None
+        r.basement_name = _blk.name if _blk else None
+        r.employee_id = drv.employee_id
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     AuditEvent.log(f"Slot held {slot.label} by driver {drv.id}", 'Parking')
     payload = _reservation_payload(r)
     payload['otp_dev'] = dev_code  # shown on-screen (no SMS provider yet)
@@ -6404,6 +6432,93 @@ def api_admin_park_dashboard(yid):
         "blocks": out_blocks,
         "sse_clients": park.broker.count(),
     })
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ADMIN: Companies + company slot allocation (the org/tenancy layer)
+# ═════════════════════════════════════════════════════════════════════════════
+@app.route('/api/admin/companies', methods=['GET', 'POST'])
+@admin_required
+def api_admin_companies():
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        yid = data.get('location_id')
+        if not name or not yid:
+            return jsonify({"status": "error", "message": "Company name and location are required"}), 400
+        y = Yard.query.get(yid)
+        if not y:
+            return jsonify({"status": "error", "message": "location not found"}), 404
+        if Company.query.filter_by(yard_id=yid).filter(db.func.lower(Company.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Company '{name}' already exists at this location"}), 400
+        c = Company(yard_id=yid, name=name, code=(data.get('code') or '').strip() or None,
+                    status=(data.get('status') or 'active'))
+        db.session.add(c)
+        db.session.commit()
+        AuditEvent.log(f"Company created: {name} @ {y.name}", 'Admin')
+        return jsonify({"status": "ok", "company": c.to_dict()})
+    loc = request.args.get('location', type=int)
+    q = Company.query
+    if loc:
+        q = q.filter_by(yard_id=loc)
+    return jsonify([c.to_dict() for c in q.order_by(Company.name).all()])
+
+
+@app.route('/api/admin/companies/<int:cid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_company(cid):
+    c = Company.query.get(cid)
+    if not c:
+        return jsonify({"status": "error", "message": "company not found"}), 404
+    if request.method == 'DELETE':
+        # Unassign its slots (keep the slots + booking history) then delete.
+        ParkingSlot.query.filter_by(company_id=cid).update({'company_id': None})
+        CompanyAllocation.query.filter_by(company_id=cid).delete()
+        DriverUser.query.filter_by(company_id=cid).update({'company_id': None})
+        db.session.delete(c)
+        db.session.commit()
+        AuditEvent.log(f"Company deleted: {c.name}", 'Admin')
+        return jsonify({"status": "ok"})
+    d = request.json or {}
+    if 'name' in d:   c.name = (d.get('name') or c.name).strip()
+    if 'code' in d:   c.code = (d.get('code') or '').strip() or None
+    if 'status' in d: c.status = (d.get('status') or 'active')
+    db.session.commit()
+    return jsonify({"status": "ok", "company": c.to_dict()})
+
+
+@app.route('/api/admin/companies/<int:cid>/allocate', methods=['POST'])
+@admin_required
+def api_admin_company_allocate(cid):
+    """Allocate `count` slots of `block_id` (basement) to the company."""
+    c = Company.query.get(cid)
+    if not c:
+        return jsonify({"status": "error", "message": "company not found"}), 404
+    d = request.json or {}
+    blk = ParkingBlock.query.get(d.get('block_id'))
+    if not blk:
+        return jsonify({"status": "error", "message": "basement not found"}), 404
+    try:
+        count = max(0, int(d.get('count', 0) or 0))
+    except (TypeError, ValueError):
+        count = 0
+    row, assigned, warning = company.allocate(c, blk, count)
+    return jsonify({"status": "ok", "allocation": row.to_dict(),
+                    "assigned": assigned, "warning": warning})
+
+
+@app.route('/api/admin/companies/<int:cid>/allocations')
+@admin_required
+def api_admin_company_allocations(cid):
+    rows = CompanyAllocation.query.filter_by(company_id=cid).all()
+    return jsonify([r.to_dict() for r in rows])
+
+
+# ── Mobile consolidated master data (per authenticated employee) ──────────────
+@app.route('/api/mobile/master-data')
+@_driver_auth_required
+def api_mobile_master_data():
+    return jsonify(company.master_data(request.driver))
 
 
 @app.route('/api/driver/register', methods=['POST'])
@@ -6889,6 +7004,18 @@ def api_admin_driver_create():
     u = DriverUser(name=name, email=email, phone=phone or None,
                    primary_plate=plate or None, primary_type=vtype)
     u.set_password(pwd)
+    # Optional org linkage — makes this DriverUser an "employee" of a company.
+    cid = data.get('company_id')
+    if cid:
+        co = Company.query.get(cid)
+        if co:
+            u.company_id = co.id
+            u.location_id = data.get('location_id') or co.yard_id
+    elif data.get('location_id'):
+        u.location_id = data.get('location_id')
+    u.employee_id = (data.get('employee_id') or '').strip() or None
+    u.role = (data.get('role') or 'employee').strip()
+    u.status = (data.get('status') or 'active').strip()
     db.session.add(u)
     db.session.commit()
     AuditEvent.log(f"Admin created driver {email}", 'Driver')
