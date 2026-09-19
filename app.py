@@ -5959,9 +5959,17 @@ def api_events_slots():
 # ── User: browse locations → blocks → slots ───────────────────────────────────
 @app.route('/api/park/locations')
 def api_park_locations():
-    """Locations that have at least one block configured (bookable)."""
+    """Locations that have at least one block configured (bookable).
+    An employee (driver token with a company) sees only their own location."""
+    try:
+        drv = _driver_from_request()
+    except Exception:
+        drv = None
+    my_loc = drv.location_id if (drv and getattr(drv, 'location_id', None)) else None
     out = []
     for y in Yard.query.order_by(Yard.name).all():
+        if my_loc is not None and y.id != my_loc:
+            continue
         blocks = ParkingBlock.query.filter_by(yard_id=y.id).count()
         if blocks == 0:
             continue
@@ -5975,15 +5983,41 @@ def api_park_locations():
     return jsonify(out)
 
 
+def _scope_company_id():
+    """If the request carries a driver Bearer token AND that driver is an
+    employee (has a company), return their company_id — used to scope the
+    public park listings to the caller's company. Admin/web calls (no token)
+    return None and see everything."""
+    try:
+        drv = _driver_from_request()
+        return drv.company_id if drv and getattr(drv, 'company_id', None) else None
+    except Exception:
+        return None
+
+
 @app.route('/api/park/locations/<int:yid>/blocks')
 def api_park_location_blocks(yid):
     y = Yard.query.get(yid)
     if not y:
         return jsonify({"error": "location not found"}), 404
+    cid = _scope_company_id()
     blocks = (ParkingBlock.query.filter_by(yard_id=yid)
               .order_by(ParkingBlock.display_order, ParkingBlock.name).all())
+    if cid is not None:
+        # employee: only basements where their company has slots
+        allowed = {s.block_id for s in ParkingSlot.query.filter_by(yard_id=yid, company_id=cid).all()}
+        blocks = [b for b in blocks if b.id in allowed]
+    out = []
+    for b in blocks:
+        d = b.to_dict()
+        if cid is not None:  # recompute counts against the company's slots only
+            cs = ParkingSlot.query.filter_by(block_id=b.id, company_id=cid).all()
+            d.update(total_slots=len(cs),
+                     available=sum(1 for s in cs if s.status == SLOT_AVAILABLE),
+                     occupied=sum(1 for s in cs if s.status in (SLOT_RESERVED, SLOT_OCCUPIED, SLOT_HELD)))
+        out.append(d)
     return jsonify({"location": {"id": y.id, "name": y.name, "location": y.location or ""},
-                    "blocks": [b.to_dict() for b in blocks]})
+                    "blocks": out})
 
 
 @app.route('/api/park/blocks/<int:bid>/slots')
@@ -5991,8 +6025,11 @@ def api_park_block_slots(bid):
     b = ParkingBlock.query.get(bid)
     if not b:
         return jsonify({"error": "block not found"}), 404
-    slots = (ParkingSlot.query.filter_by(block_id=bid)
-             .order_by(ParkingSlot.display_order, ParkingSlot.label).all())
+    cid = _scope_company_id()
+    q = ParkingSlot.query.filter_by(block_id=bid)
+    if cid is not None:
+        q = q.filter_by(company_id=cid)   # employee: only their company's slots
+    slots = q.order_by(ParkingSlot.display_order, ParkingSlot.label).all()
     return jsonify({"block": b.to_dict(),
                     "slots": [s.to_dict(public=True) for s in slots]})
 
