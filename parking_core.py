@@ -30,8 +30,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import text
 
 from database import (
-    db, Setting, Yard, DriverReservation, DriverNotification,
-    ParkingBlock, ParkingSlot, OtpVerification, SlotWatcher,
+    db, Setting, Yard, Tariff, DriverReservation, DriverNotification,
+    ParkingBlock, ParkingZone, ParkingSlot, OtpVerification, SlotWatcher,
     SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
     SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUS_COLORS,
 )
@@ -46,6 +46,7 @@ _CFG_DEFAULTS = {
     'park_otp_max_attempts':        '5',
     'park_otp_resend_max':          '3',
     'park_otp_dev_echo':            '1',     # 1 = return OTP on-screen (no SMS provider yet)
+    'park_free_grace_minutes':      '15',    # free parking window before billing starts
 }
 
 
@@ -65,6 +66,35 @@ def cfg_int(key):
 
 def _now():
     return datetime.utcnow()
+
+
+# ── Pricing (server-authoritative amount; app shows a live estimate) ──────────
+def tariff_for(vehicle_type):
+    """Return (rate_per_hour, daily_cap, free_grace_minutes) for a vehicle type.
+    Uses the existing Tariff table; free grace is a live-tunable Setting."""
+    t = Tariff.query.filter(db.func.lower(Tariff.vehicle_type) == (vehicle_type or 'Car').lower()).first()
+    if not t:
+        t = Tariff.query.first()
+    rate = t.rate if t else 0
+    cap = t.daily_cap if t else 0
+    grace = cfg_int('park_free_grace_minutes')
+    return rate, cap, grace
+
+
+def amount_for(vehicle_type, minutes):
+    """Compute cost for `minutes` parked. ceil to the hour after a free grace;
+    capped at the daily cap. Returns whole rupees."""
+    if minutes is None:
+        return 0
+    rate, cap, grace = tariff_for(vehicle_type)
+    billable = max(0, int(minutes) - grace)
+    if billable <= 0:
+        return 0
+    import math
+    amt = int(math.ceil(billable / 60.0)) * rate
+    if cap and amt > cap:
+        amt = cap
+    return amt
 
 
 # ── SSE broker ────────────────────────────────────────────────────────────────
@@ -370,6 +400,8 @@ def release_slot(reservation, terminal_state='COMPLETED', legacy='consumed', eve
     reservation.exited_at = reservation.exited_at or now
     if terminal_state == 'COMPLETED':
         reservation.completed_at = now
+        # Server-authoritative final amount from actual parked minutes.
+        reservation.amount = amount_for(reservation.vehicle_type, reservation.duration_minutes())
     elif terminal_state == 'CANCELLED':
         reservation.cancelled_at = now
     db.session.commit()
@@ -467,33 +499,61 @@ def _auto_code(name):
 
 def create_block_with_slots(yard_id, name, code=None, total_slots=0,
                             labels=None, slot_type='standard', start_index=1):
-    """Create a block and auto-generate its slots. If `labels` is given, uses
-    those names verbatim; else generates '<code><n>' for n in 1..total_slots."""
+    """Create a block, a default zone inside it, and auto-generate its slots
+    (assigned to that zone). Basement -> Zone -> Slot."""
     code = (code or _auto_code(name)).strip()
     blk = ParkingBlock(yard_id=yard_id, name=name, code=code)
     db.session.add(blk)
+    db.session.flush()
+    zone = ParkingZone(block_id=blk.id, yard_id=yard_id, name='Zone ' + code, code=code, display_order=1)
+    db.session.add(zone)
     db.session.flush()
     if labels:
         names = [str(x).strip() for x in labels if str(x).strip()]
     else:
         names = ['%s%d' % (code, i) for i in range(start_index, start_index + int(total_slots))]
     for i, lbl in enumerate(names, start=1):
-        db.session.add(ParkingSlot(block_id=blk.id, yard_id=yard_id, label=lbl,
+        db.session.add(ParkingSlot(block_id=blk.id, zone_id=zone.id, yard_id=yard_id, label=lbl,
                                    display_order=i, slot_type=slot_type,
                                    status=SLOT_AVAILABLE))
     db.session.commit()
     return blk
 
 
-def add_slot(block, label=None, slot_type='standard'):
-    """Add a single slot to a block. Auto-labels if none given."""
+def create_zone_with_slots(block, name, code=None, total_slots=0,
+                           labels=None, slot_type='standard', start_index=1):
+    """Create a new zone inside an existing block + its slots."""
+    code = (code or _auto_code(name)).strip()
+    zone = ParkingZone(block_id=block.id, yard_id=block.yard_id, name=name, code=code,
+                       display_order=(ParkingZone.query.filter_by(block_id=block.id).count() + 1))
+    db.session.add(zone)
+    db.session.flush()
+    if labels:
+        names = [str(x).strip() for x in labels if str(x).strip()]
+    else:
+        names = ['%s%d' % (code, i) for i in range(start_index, start_index + int(total_slots))]
+    order0 = ParkingSlot.query.filter_by(block_id=block.id).count()
+    for i, lbl in enumerate(names, start=1):
+        db.session.add(ParkingSlot(block_id=block.id, zone_id=zone.id, yard_id=block.yard_id,
+                                   label=lbl, display_order=order0 + i, slot_type=slot_type,
+                                   status=SLOT_AVAILABLE))
+    db.session.commit()
+    return zone
+
+
+def add_slot(block, label=None, slot_type='standard', zone_id=None):
+    """Add a single slot to a block (into a zone). Auto-labels if none given."""
     if not label:
         n = ParkingSlot.query.filter_by(block_id=block.id).count() + 1
         label = '%s%d' % ((block.code or _auto_code(block.name)), n)
     if ParkingSlot.query.filter_by(block_id=block.id, label=label).first():
         return None, 'duplicate_label'
+    if not zone_id:
+        z = (ParkingZone.query.filter_by(block_id=block.id)
+             .order_by(ParkingZone.display_order, ParkingZone.id).first())
+        zone_id = z.id if z else None
     order = ParkingSlot.query.filter_by(block_id=block.id).count() + 1
-    slot = ParkingSlot(block_id=block.id, yard_id=block.yard_id, label=label,
+    slot = ParkingSlot(block_id=block.id, zone_id=zone_id, yard_id=block.yard_id, label=label,
                        display_order=order, slot_type=slot_type, status=SLOT_AVAILABLE)
     db.session.add(slot)
     db.session.commit()

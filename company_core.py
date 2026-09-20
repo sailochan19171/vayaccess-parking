@@ -14,8 +14,8 @@ IS the capacity, so the existing atomic slot booking already enforces the
 from datetime import datetime
 
 from database import (
-    db, Yard, Company, CompanyAllocation, DriverUser, ParkingBlock, ParkingSlot,
-    DriverReservation, AuditEvent, Setting, Vehicle,
+    db, Yard, Company, CompanyAllocation, DriverUser, ParkingBlock, ParkingZone,
+    ParkingSlot, DriverReservation, AuditEvent, Setting, Vehicle, Tariff,
     SLOT_AVAILABLE,
 )
 import parking_core as park
@@ -104,13 +104,21 @@ def master_data(driver):
               if block_ids else [])
     block_by_id = {b.id: b for b in blocks}
 
-    # basements with per-company counts
+    # basements with per-company counts + their zones (Basement -> Zone -> Slot)
     basements = []
     for b in sorted(blocks, key=lambda x: (x.display_order or 0, x.name)):
         bslots = [s for s in my_slots if s.block_id == b.id]
         avail = sum(1 for s in bslots if s.status == SLOT_AVAILABLE)
+        zids = sorted({s.zone_id for s in bslots if s.zone_id})
+        zmap = {z.id: z for z in ParkingZone.query.filter(ParkingZone.id.in_(zids)).all()} if zids else {}
+        zones = []
+        for zid in zids:
+            zs = [s for s in bslots if s.zone_id == zid]
+            zones.append({"id": zid, "name": (zmap[zid].name if zid in zmap else 'Zone'),
+                          "allocated": len(zs),
+                          "available": sum(1 for s in zs if s.status == SLOT_AVAILABLE)})
         basements.append({**b.to_dict(with_counts=False),
-                          "allocated": len(bslots), "available": avail})
+                          "allocated": len(bslots), "available": avail, "zones": zones})
 
     slots = [s.to_dict(public=True) for s in
              sorted(my_slots, key=lambda s: (s.block_id, s.display_order or 0, s.label))]
@@ -136,6 +144,12 @@ def master_data(driver):
             "grace_minutes": park.cfg_int('park_grace_minutes'),
             "default_hours": park.cfg_int('park_default_reservation_hours'),
             "otp_required": True,
+            # pricing so the app can show a LIVE cost estimate; server sets the
+            # final amount at exit.
+            "currency": "INR",
+            "free_grace_minutes": park.cfg_int('park_free_grace_minutes'),
+            "tariffs": {t.vehicle_type: {"rate": t.rate, "daily_cap": t.daily_cap}
+                        for t in Tariff.query.all()},
         },
         "server_time": _now().isoformat() + 'Z',
         "updated_at": _now().isoformat() + 'Z',

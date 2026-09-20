@@ -184,6 +184,7 @@ def migrate_schema(engine):
     ]
     parking_slots_new = [
         ("company_id",  "INTEGER"),
+        ("zone_id",     "INTEGER"),
     ]
     # Structured slot link + real-time lifecycle on driver reservations.
     driver_reservations_new = [
@@ -193,6 +194,8 @@ def migrate_schema(engine):
         ("company_id",      "INTEGER"),
         ("company_name",    "VARCHAR(120)"),
         ("basement_name",   "VARCHAR(80)"),
+        ("zone_id",         "INTEGER"),
+        ("zone_name",       "VARCHAR(80)"),
         ("employee_id",     "VARCHAR(40)"),
         ("booking_code",    "VARCHAR(30)"),
         ("state",           "VARCHAR(20)"),
@@ -861,6 +864,8 @@ class DriverReservation(db.Model):
     # company/basement is later renamed or re-allocated (spec 26). Added 2026-09-19.
     company_name    = db.Column(db.String(120), nullable=True)
     basement_name   = db.Column(db.String(80),  nullable=True)
+    zone_id         = db.Column(db.Integer,     nullable=True)
+    zone_name       = db.Column(db.String(80),  nullable=True)
     employee_id     = db.Column(db.String(40),  nullable=True)
     booking_code    = db.Column(db.String(30),  nullable=True, index=True)   # PK-2026-000123
     state           = db.Column(db.String(20),  nullable=False, default='RESERVED')  # see class docstring
@@ -902,6 +907,7 @@ class DriverReservation(db.Model):
             "company_id":     self.company_id,
             "company_name":   self.company_name or "",
             "basement_name":  self.basement_name or "",
+            "zone_name":      self.zone_name or "",
             "employee_id":    self.employee_id or "",
             "vehicle_plate":  self.vehicle_plate,
             "vehicle_type":   self.vehicle_type,
@@ -1018,11 +1024,43 @@ class ParkingBlock(db.Model):
         return d
 
 
+class ParkingZone(db.Model):
+    """A zone within a basement (block): Basement -> Zone -> Slot. New table."""
+    __tablename__ = 'parking_zones'
+    id            = db.Column(db.Integer, primary_key=True)
+    block_id      = db.Column(db.Integer, db.ForeignKey('parking_blocks.id'), nullable=False, index=True)
+    yard_id       = db.Column(db.Integer, index=True)          # denormalised location
+    name          = db.Column(db.String(80),  nullable=False)  # "Zone A"
+    code          = db.Column(db.String(20),  nullable=True)
+    status        = db.Column(db.String(20),  nullable=True, default='active')  # active/inactive
+    display_order = db.Column(db.Integer,     default=0)
+    created_at    = db.Column(db.DateTime,    default=datetime.utcnow)
+
+    def counts(self):
+        rows = ParkingSlot.query.filter_by(zone_id=self.id).all()
+        total = len(rows)
+        avail = sum(1 for s in rows if s.status == SLOT_AVAILABLE)
+        occ = sum(1 for s in rows if s.status in (SLOT_RESERVED, SLOT_OCCUPIED, SLOT_HELD))
+        return total, avail, occ
+
+    def to_dict(self, with_counts=True):
+        d = {
+            "id": self.id, "block_id": self.block_id, "yard_id": self.yard_id,
+            "name": self.name, "code": self.code or "", "status": self.status or "active",
+            "display_order": self.display_order or 0,
+        }
+        if with_counts:
+            total, avail, occ = self.counts()
+            d.update(total_slots=total, available=avail, occupied=occ)
+        return d
+
+
 class ParkingSlot(db.Model):
-    """One parkable slot inside a block. `status` is the source of truth."""
+    """One parkable slot inside a block/zone. `status` is the source of truth."""
     __tablename__ = 'parking_slots'
     id             = db.Column(db.Integer, primary_key=True)
     block_id       = db.Column(db.Integer, db.ForeignKey('parking_blocks.id'), nullable=False, index=True)
+    zone_id        = db.Column(db.Integer, index=True)          # -> parking_zones.id (nullable = legacy)
     yard_id        = db.Column(db.Integer, index=True)          # denormalised parent location
     label          = db.Column(db.String(40),  nullable=False)  # "A5"
     status         = db.Column(db.String(20),  nullable=False, default=SLOT_AVAILABLE, index=True)
@@ -1067,6 +1105,7 @@ class ParkingSlot(db.Model):
             "bookable":      self.is_bookable,
             "version":       self.version or 0,
             "company_id":    self.company_id,
+            "zone_id":       self.zone_id,
         }
         if not public:
             d.update(

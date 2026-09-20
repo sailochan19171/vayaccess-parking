@@ -21,7 +21,7 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       MenuPermission, RolePermission, migrate_schema,
                       DriverUser, DriverSession, DriverReservation,
                       DriverNotification, ImageBlob, PrintJob,
-                      ParkingBlock, ParkingSlot, OtpVerification, SlotWatcher,
+                      ParkingBlock, ParkingZone, ParkingSlot, OtpVerification, SlotWatcher,
                       DeviceToken, Company, CompanyAllocation, Vehicle,
                       SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
                       SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
@@ -6109,6 +6109,10 @@ def api_park_hold(sid):
             r.company_name = _co.name if _co else None
         _blk = db.session.get(ParkingBlock, slot.block_id) if slot.block_id else None
         r.basement_name = _blk.name if _blk else None
+        if slot.zone_id:
+            _z = db.session.get(ParkingZone, slot.zone_id)
+            r.zone_id = slot.zone_id
+            r.zone_name = _z.name if _z else None
         r.employee_id = drv.employee_id
         db.session.commit()
     except Exception:
@@ -6485,7 +6489,8 @@ def api_admin_park_block_slots(bid):
         data = request.json or {}
         label = (data.get('label') or '').strip() or None
         slot_type = (data.get('slot_type') or 'standard').strip()
-        slot, err = park.add_slot(b, label, slot_type)
+        zid = data.get('zone_id')
+        slot, err = park.add_slot(b, label, slot_type, zone_id=zid)
         if err:
             return jsonify({"status": "error", "message": _PARK_ERRORS.get(err, err)}), 400
         AuditEvent.log(f"Slot {slot.label} added to {b.name}", 'Admin')
@@ -6493,6 +6498,53 @@ def api_admin_park_block_slots(bid):
     slots = (ParkingSlot.query.filter_by(block_id=bid)
              .order_by(ParkingSlot.display_order, ParkingSlot.label).all())
     return jsonify([s.to_dict(public=False) for s in slots])
+
+
+# ── Zones (Basement -> Zone -> Slot) ─────────────────────────────────────────
+@app.route('/api/admin/park/blocks/<int:bid>/zones', methods=['GET', 'POST'])
+@admin_required
+def api_admin_park_zones(bid):
+    b = ParkingBlock.query.get(bid)
+    if not b:
+        return jsonify({"status": "error", "message": "block not found"}), 404
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Zone name is required"}), 400
+        try:
+            total = max(0, int(data.get('total_slots', 0) or 0))
+        except (TypeError, ValueError):
+            total = 0
+        z = park.create_zone_with_slots(b, name, (data.get('code') or '').strip() or None,
+                                        total, data.get('labels'),
+                                        (data.get('slot_type') or 'standard').strip())
+        AuditEvent.log(f"Zone '{name}' created in {b.name} with {total} slots", 'Admin')
+        return jsonify({"status": "ok", "zone": z.to_dict()})
+    zones = (ParkingZone.query.filter_by(block_id=bid)
+             .order_by(ParkingZone.display_order, ParkingZone.name).all())
+    return jsonify([z.to_dict() for z in zones])
+
+
+@app.route('/api/admin/park/zones/<int:zid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_park_zone(zid):
+    z = ParkingZone.query.get(zid)
+    if not z:
+        return jsonify({"status": "error", "message": "zone not found"}), 404
+    if request.method == 'DELETE':
+        # unlink slots (kept, just zone-less) then delete the zone
+        ParkingSlot.query.filter_by(zone_id=zid).update({'zone_id': None})
+        db.session.delete(z)
+        db.session.commit()
+        AuditEvent.log(f"Zone '{z.name}' deleted", 'Admin')
+        return jsonify({"status": "ok"})
+    d = request.json or {}
+    if 'name' in d:   z.name = (d.get('name') or z.name).strip()
+    if 'code' in d:   z.code = (d.get('code') or '').strip() or None
+    if 'status' in d: z.status = (d.get('status') or 'active')
+    db.session.commit()
+    return jsonify({"status": "ok", "zone": z.to_dict()})
 
 
 @app.route('/api/admin/park/slots/<int:sid>', methods=['PUT', 'DELETE'])
