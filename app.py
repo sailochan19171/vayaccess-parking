@@ -6206,6 +6206,46 @@ def api_park_cancel(rid):
     return jsonify(_reservation_payload(r2))
 
 
+@app.route('/api/park/scan', methods=['POST'])
+@_driver_auth_required
+def api_park_scan():
+    """Server-authoritative QR scan. The app sends the raw scanned value; the
+    server validates it's a real signed parking pass ('r' token), that it
+    belongs to THIS driver, then transitions by current state:
+      RESERVED -> OCCUPIED (entry), OCCUPIED -> COMPLETED (exit).
+    An unrelated/foreign/expired QR changes nothing (spec 8)."""
+    drv = request.driver
+    raw = ((request.get_json(silent=True) or {}).get('data') or '').strip()
+    tok = raw
+    if '/v/' in tok:
+        tok = tok.split('/v/', 1)[1].strip().strip('/')
+    parsed = _verify_pass_token(tok)
+    if not parsed or parsed[0] != 'r':
+        return jsonify({"error": "This QR is not a valid VayAccess parking pass.", "code": "invalid_qr"}), 400
+    r = DriverReservation.query.get(parsed[1])
+    if not r:
+        return jsonify({"error": "Reservation not found.", "code": "not_found"}), 404
+    if r.driver_id != drv.id:
+        return jsonify({"error": "This pass belongs to another user.", "code": "foreign"}), 403
+    state = (r.state or '').upper()
+    if state == 'RESERVED':
+        r2, err = park.occupy_slot(r, drv)
+        if err:
+            return _park_err(err)
+        AuditEvent.log(f"QR entry {r2.booking_code} slot {r2.slot_label}", 'Parking')
+        return jsonify({"status": "ok", "action": "entry", "reservation": _reservation_payload(r2),
+                        "message": f"Entry recorded — slot {r2.slot_label} is now OCCUPIED."})
+    if state == 'OCCUPIED':
+        r2, err = park.release_slot(r, terminal_state='COMPLETED', legacy='consumed', event='slot.released')
+        if err:
+            return _park_err(err)
+        AuditEvent.log(f"QR exit {r2.booking_code} slot {r2.slot_label}", 'Parking')
+        return jsonify({"status": "ok", "action": "exit", "reservation": _reservation_payload(r2),
+                        "message": f"Exit recorded — you parked {r2.to_dict().get('duration') or ''}. Thanks!"})
+    return jsonify({"error": f"This booking is {state.lower() or 'inactive'} — nothing to scan.",
+                    "code": "bad_state"}), 400
+
+
 @app.route('/api/park/reservations/mine')
 @_driver_auth_required
 def api_park_my_reservations():
