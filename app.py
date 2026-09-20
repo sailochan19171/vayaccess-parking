@@ -6268,6 +6268,51 @@ def api_park_my_reservations():
                     "server_now_ms": int(_cal.timegm(datetime.utcnow().timetuple()) * 1000)})
 
 
+@app.route('/api/park/my/report')
+@_driver_auth_required
+def api_park_my_report():
+    """Per-user parking report (their own data only) for the mobile hamburger
+    menu -> My Reports. Server-side aggregation over all the driver's bookings."""
+    drv = request.driver
+    rows = (DriverReservation.query.filter_by(driver_id=drv.id)
+            .order_by(DriverReservation.id.desc()).all())
+    now = datetime.utcnow()
+    week_ago = now - timedelta(days=7)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    total_min = 0
+    completed = cancelled = expired = active = week = month = total_amt = 0
+    for r in rows:
+        st = (r.state or '').upper()
+        if st == 'COMPLETED':
+            completed += 1
+        elif st == 'CANCELLED':
+            cancelled += 1
+        elif st == 'EXPIRED':
+            expired += 1
+        elif st in DriverReservation.ACTIVE_STATES:
+            active += 1
+        total_min += (r.duration_minutes() or 0)
+        total_amt += (r.amount or 0)
+        if r.start_at and r.start_at >= week_ago:
+            week += 1
+        if r.start_at and r.start_at >= month_start:
+            month += 1
+    return jsonify({
+        "summary": {
+            "total_bookings": len(rows),
+            "completed": completed, "cancelled": cancelled, "expired": expired,
+            "active": active,
+            "this_week": week, "this_month": month,
+            "total_minutes": total_min,
+            "total_hours": round(total_min / 60, 1),
+            "avg_minutes": round(total_min / completed) if completed else 0,
+            "total_amount": total_amt,
+        },
+        "recent": [r.to_dict() for r in rows[:25]],
+        "user": drv.to_dict(),
+    })
+
+
 # ── User: watch / notify-me ───────────────────────────────────────────────────
 @app.route('/api/park/slots/<int:sid>/watch', methods=['POST'])
 @_driver_auth_required
