@@ -23,6 +23,16 @@ def to_ist(dt, fmt="%Y-%m-%d %H:%M:%S"):
         return dt.strftime(fmt)
     return (dt + _IST_OFFSET).strftime(fmt)
 
+
+def to_epoch_ms(dt):
+    """Epoch milliseconds for a naive-UTC datetime, timezone-independently
+    (treats the stored value as UTC via calendar.timegm). Used for reliable
+    client-side live timers that survive app restart / device change."""
+    if dt is None:
+        return None
+    import calendar
+    return int(calendar.timegm(dt.timetuple()) * 1000 + dt.microsecond // 1000)
+
 class Whitelist(db.Model):
     __tablename__ = 'whitelist'
     id = db.Column(db.Integer, primary_key=True)
@@ -905,6 +915,10 @@ class DriverReservation(db.Model):
             "grace_until":    to_ist(self.grace_until, "%Y-%m-%d %H:%M:%S") or "",
             "occupied_at":    to_ist(self.occupied_at, "%Y-%m-%d %H:%M") or "",
             "exited_at":      to_ist(self.exited_at, "%Y-%m-%d %H:%M") or "",
+            # Epoch-ms for reliable, timezone-proof client timers (survive restart)
+            "occupied_at_ms": to_epoch_ms(self.occupied_at),
+            "exited_at_ms":   to_epoch_ms(self.exited_at),
+            "start_at_ms":    to_epoch_ms(self.start_at),
             "duration_minutes": self.duration_minutes(),
             "duration":       self.fmt_duration(self.duration_minutes()),
             "amount":         self.amount or 0,

@@ -6218,8 +6218,10 @@ def api_park_my_reservations():
                .filter(DriverReservation.driver_id == drv.id,
                        ~DriverReservation.state.in_(DriverReservation.ACTIVE_STATES))
                .order_by(DriverReservation.id.desc()).limit(50).all())
+    import calendar as _cal
     return jsonify({"active": [_reservation_payload(r) for r in active],
-                    "history": [r.to_dict() for r in history]})
+                    "history": [r.to_dict() for r in history],
+                    "server_now_ms": int(_cal.timegm(datetime.utcnow().timetuple()) * 1000)})
 
 
 # ── User: watch / notify-me ───────────────────────────────────────────────────
