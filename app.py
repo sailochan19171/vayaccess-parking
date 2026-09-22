@@ -3945,25 +3945,39 @@ def seed_defaults():
     explicit_pwd = os.environ.get('INITIAL_ADMIN_PASSWORD')
     if explicit_pwd is not None and explicit_pwd.strip() != '':
         admin_user = (os.environ.get('INITIAL_ADMIN_USER') or 'admin').strip() or 'admin'
-        if not Role.query.filter(db.func.lower(Role.name) == 'administrator').first():
-            db.session.add(Role(name='Administrator',
-                                description='Full system access (seeded on first boot)'))
-            db.session.commit()
+        # Apply INITIAL_ADMIN_PASSWORD only when it has CHANGED since we last
+        # applied it (fingerprint stored in Settings), or when the admin row
+        # doesn't exist yet. This keeps the env var as a break-glass reset
+        # (edit it in Render -> next boot applies the new value) WITHOUT
+        # clobbering a password the admin changed in the UI on every redeploy.
+        import hashlib as _hl
+        fp = _hl.sha256((admin_user + '\x00' + explicit_pwd.strip()).encode()).hexdigest()
         existing = Account.query.filter(
             db.func.lower(Account.name) == admin_user.lower()).first()
-        if existing:
-            existing.role = 'Administrator'
-            existing.set_password(explicit_pwd.strip())
-            action = 'password reset from INITIAL_ADMIN_PASSWORD'
+        already_applied = (Setting.get('initial_admin_pwd_fp', '') == fp)
+        if existing and already_applied:
+            # Env value unchanged since last applied — leave the (possibly
+            # UI-changed) password alone.
+            has_login_capable_account = True
         else:
-            a = Account(name=admin_user, nickname='Initial Admin', role='Administrator')
-            a.set_password(explicit_pwd.strip())
-            db.session.add(a)
-            action = 'seeded from INITIAL_ADMIN_PASSWORD'
-        db.session.commit()
-        AuditEvent.log(f"Admin {action}: {admin_user}", area='System')
-        print(f"[OK] Admin {action}: {admin_user}")
-        has_login_capable_account = True
+            if not Role.query.filter(db.func.lower(Role.name) == 'administrator').first():
+                db.session.add(Role(name='Administrator',
+                                    description='Full system access (seeded on first boot)'))
+                db.session.commit()
+            if existing:
+                existing.role = 'Administrator'
+                existing.set_password(explicit_pwd.strip())
+                action = 'password reset from INITIAL_ADMIN_PASSWORD'
+            else:
+                a = Account(name=admin_user, nickname='Initial Admin', role='Administrator')
+                a.set_password(explicit_pwd.strip())
+                db.session.add(a)
+                action = 'seeded from INITIAL_ADMIN_PASSWORD'
+            Setting.set('initial_admin_pwd_fp', fp)
+            db.session.commit()
+            AuditEvent.log(f"Admin {action}: {admin_user}", area='System')
+            print(f"[OK] Admin {action}: {admin_user}")
+            has_login_capable_account = True
 
     if not has_login_capable_account:
         # Make sure the "Administrator" role exists so the admin_required
