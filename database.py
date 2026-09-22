@@ -210,6 +210,9 @@ def migrate_schema(engine):
         ("rejected_at",     "TIMESTAMP"),
         ("reject_reason",   "VARCHAR(200)"),
         ("booking_code",    "VARCHAR(30)"),
+        ("booking_type",    "VARCHAR(20)"),
+        ("scheduled",       "BOOLEAN"),
+        ("coupon_code",     "VARCHAR(40)"),
         ("state",           "VARCHAR(20)"),
         ("held_until",      "TIMESTAMP"),
         ("grace_until",     "TIMESTAMP"),
@@ -289,6 +292,40 @@ class Tariff(db.Model):
         return {
             "id": self.id, "type": self.vehicle_type, "model": self.model,
             "rate": self.rate, "dailyCap": self.daily_cap, "lost": self.lost_ticket,
+        }
+
+
+class Coupon(db.Model):
+    """Discount coupon applied at billing (spec §7). percent_off and/or flat_off.
+    New table -> db.create_all(). (added 2026-09-22)"""
+    __tablename__ = 'coupons'
+    id          = db.Column(db.Integer, primary_key=True)
+    code        = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    description = db.Column(db.String(160), nullable=True)
+    percent_off = db.Column(db.Integer, nullable=False, default=0)   # 0-100
+    flat_off    = db.Column(db.Integer, nullable=False, default=0)   # whole rupees
+    active      = db.Column(db.Boolean, default=True)
+    expires_at  = db.Column(db.DateTime, nullable=True)
+    max_uses    = db.Column(db.Integer, nullable=True)   # NULL = unlimited
+    used_count  = db.Column(db.Integer, default=0)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def is_valid(self):
+        if not self.active:
+            return False
+        if self.expires_at and datetime.utcnow() > self.expires_at:
+            return False
+        if self.max_uses is not None and (self.used_count or 0) >= self.max_uses:
+            return False
+        return True
+
+    def to_dict(self):
+        return {
+            "id": self.id, "code": self.code, "description": self.description or "",
+            "percent_off": self.percent_off or 0, "flat_off": self.flat_off or 0,
+            "active": bool(self.active), "valid": self.is_valid(),
+            "expires_at": to_ist(self.expires_at, "%Y-%m-%d %H:%M") or "",
+            "max_uses": self.max_uses, "used_count": self.used_count or 0,
         }
 
 
@@ -878,6 +915,12 @@ class DriverReservation(db.Model):
     slot_label      = db.Column(db.String(40),  nullable=True)
     start_at        = db.Column(db.DateTime,    nullable=False)
     end_at          = db.Column(db.DateTime,    nullable=False)
+    # Booking type (spec §5): hourly / full_day / overnight / multi_day / weekly /
+    # monthly / quarterly / annual / visitor / staff / event. Drives the booked
+    # duration and, in Phase 3, the pricing rules.
+    booking_type    = db.Column(db.String(20),  nullable=True, default='hourly')
+    scheduled       = db.Column(db.Boolean,     default=False)   # True = advance (future start)
+    coupon_code     = db.Column(db.String(40),  nullable=True)   # applied at billing (spec §7)
     status          = db.Column(db.String(20),  nullable=False, default='confirmed')   # confirmed / consumed / cancelled / expired
     amount          = db.Column(db.Integer,     nullable=True)
     payment_method  = db.Column(db.String(40),  nullable=True)   # UPI/FASTag/Card/Wallet
@@ -957,6 +1000,8 @@ class DriverReservation(db.Model):
             "vehicle_type":   self.vehicle_type,
             "slot_label":     self.slot_label or "",
             "booking_code":   self.booking_code or "",
+            "booking_type":   self.booking_type or "hourly",
+            "scheduled":      bool(self.scheduled),
             "start_at":       to_ist(self.start_at, "%Y-%m-%d %H:%M") or "",
             "end_at":         to_ist(self.end_at, "%Y-%m-%d %H:%M") or "",
             "status":         self.status,
@@ -972,6 +1017,7 @@ class DriverReservation(db.Model):
             "duration_minutes": self.duration_minutes(),
             "duration":       self.fmt_duration(self.duration_minutes()),
             "amount":         self.amount or 0,
+            "coupon_code":    self.coupon_code or "",
             "payment_method": self.payment_method or "",
             "transaction_id": self.transaction_id or "",
             "created_at":     to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",

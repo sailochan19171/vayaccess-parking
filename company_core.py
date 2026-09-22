@@ -183,6 +183,18 @@ def master_data(driver):
             "free_grace_minutes": park.cfg_int('park_free_grace_minutes'),
             "tariffs": {t.vehicle_type: {"rate": t.rate, "daily_cap": t.daily_cap}
                         for t in Tariff.query.all()},
+            # Booking types the app can offer (spec §5).
+            "booking_types": list(park.BOOKING_TYPES),
+            # Dynamic pricing rules so the app can show a matching estimate (§7).
+            "pricing": {
+                "peak_start": park.cfg('park_peak_start'),
+                "peak_end": park.cfg('park_peak_end'),
+                "peak_multiplier": park._cfg_float('park_peak_multiplier'),
+                "weekend_multiplier": park._cfg_float('park_weekend_multiplier'),
+                "holiday_multiplier": park._cfg_float('park_holiday_multiplier'),
+                "holidays": [d.strip() for d in (park.cfg('park_holidays') or '').split(',') if d.strip()],
+                "tax_percent": park._cfg_float('park_tax_percent'),
+            },
         },
         "server_time": _now().isoformat() + 'Z',
         "updated_at": _now().isoformat() + 'Z',

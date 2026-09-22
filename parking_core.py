@@ -47,6 +47,14 @@ _CFG_DEFAULTS = {
     'park_otp_resend_max':          '3',
     'park_otp_dev_echo':            '1',     # 1 = return OTP on-screen (no SMS provider yet)
     'park_free_grace_minutes':      '15',    # free parking window before billing starts
+    # ── Dynamic pricing (spec §7) — all live-tunable Settings ─────────────────
+    'park_peak_start':              '18:00', # peak window start (HH:MM, 24h)
+    'park_peak_end':                '22:00', # peak window end
+    'park_peak_multiplier':         '1.0',   # 1.0 = disabled; e.g. 1.5 = +50% in peak
+    'park_weekend_multiplier':      '1.0',   # applied Sat/Sun
+    'park_holiday_multiplier':      '1.0',   # applied on listed holidays
+    'park_holidays':                '',      # comma-separated YYYY-MM-DD
+    'park_tax_percent':             '0',     # GST/tax % added on top
 }
 
 
@@ -68,6 +76,56 @@ def _now():
     return datetime.utcnow()
 
 
+# ── Booking types (spec §5): map a type to its default parking window ─────────
+# Each entry: number of hours the booking covers (None => use the caller's hours
+# or the default). Long-term passes (weekly/monthly/…) reserve the slot for the
+# whole period (assigned parking).
+BOOKING_TYPE_HOURS = {
+    'hourly':    None,     # caller hours / default
+    'full_day':  24,
+    'overnight': 12,
+    'multi_day': None,     # caller passes days -> hours
+    'weekly':    24 * 7,
+    'monthly':   24 * 30,
+    'quarterly': 24 * 90,
+    'annual':    24 * 365,
+    'visitor':   None,
+    'staff':     24 * 30,  # staff parking ~ monthly by default
+    'event':     None,
+    'resident':  24 * 30,
+    'vip':       None,
+}
+BOOKING_TYPES = tuple(BOOKING_TYPE_HOURS.keys())
+
+
+def booking_window(booking_type=None, hours=None, days=None, start_at=None):
+    """Resolve (start_at, end_at, scheduled) for a booking.
+
+    - start_at: optional future datetime for advance booking (else now).
+    - booking_type: sets the default duration (see BOOKING_TYPE_HOURS).
+    - hours / days: explicit overrides (days wins for multi_day).
+    Returns whole-hour windows. `scheduled` is True when start is in the future.
+    """
+    now = _now()
+    start = start_at or now
+    bt = (booking_type or 'hourly').lower()
+    if days:
+        try:
+            span_h = max(1, int(days)) * 24
+        except (TypeError, ValueError):
+            span_h = 24
+    elif hours:
+        try:
+            span_h = max(1, int(hours))
+        except (TypeError, ValueError):
+            span_h = cfg_int('park_default_reservation_hours')
+    else:
+        span_h = BOOKING_TYPE_HOURS.get(bt) or cfg_int('park_default_reservation_hours')
+    end = start + timedelta(hours=span_h)
+    scheduled = start > now + timedelta(minutes=1)
+    return start, end, scheduled
+
+
 # ── Pricing (server-authoritative amount; app shows a live estimate) ──────────
 def tariff_for(vehicle_type):
     """Return (rate_per_hour, daily_cap, free_grace_minutes) for a vehicle type.
@@ -83,7 +141,7 @@ def tariff_for(vehicle_type):
 
 def amount_for(vehicle_type, minutes):
     """Compute cost for `minutes` parked. ceil to the hour after a free grace;
-    capped at the daily cap. Returns whole rupees."""
+    capped at the daily cap. Returns whole rupees. (Base rate only.)"""
     if minutes is None:
         return 0
     rate, cap, grace = tariff_for(vehicle_type)
@@ -95,6 +153,73 @@ def amount_for(vehicle_type, minutes):
     if cap and amt > cap:
         amt = cap
     return amt
+
+
+def _cfg_float(key):
+    try:
+        return float(cfg(key))
+    except (TypeError, ValueError):
+        return float(_CFG_DEFAULTS.get(key, '0') or 0)
+
+
+def _time_multiplier(when):
+    """Peak/weekend/holiday multiplier for a datetime (spec §7).
+
+    Holiday overrides weekend; peak multiplies on top. Returns (mult, label)."""
+    if when is None:
+        return 1.0, ''
+    labels = []
+    mult = 1.0
+    # Holiday (date match) — takes precedence over weekend.
+    hol = {d.strip() for d in (cfg('park_holidays') or '').split(',') if d.strip()}
+    if when.strftime('%Y-%m-%d') in hol:
+        hm = _cfg_float('park_holiday_multiplier') or 1.0
+        if hm and hm != 1.0:
+            mult *= hm; labels.append('holiday')
+    elif when.weekday() >= 5:   # Sat=5, Sun=6
+        wm = _cfg_float('park_weekend_multiplier') or 1.0
+        if wm and wm != 1.0:
+            mult *= wm; labels.append('weekend')
+    # Peak window (time-of-day) — multiplies on top.
+    try:
+        ps = cfg('park_peak_start') or '18:00'
+        pe = cfg('park_peak_end') or '22:00'
+        ph, pm_ = int(ps.split(':')[0]), int(ps.split(':')[1])
+        eh, em_ = int(pe.split(':')[0]), int(pe.split(':')[1])
+        cur = when.hour * 60 + when.minute
+        if ph * 60 + pm_ <= cur < eh * 60 + em_:
+            pk = _cfg_float('park_peak_multiplier') or 1.0
+            if pk and pk != 1.0:
+                mult *= pk; labels.append('peak')
+    except (ValueError, IndexError):
+        pass
+    return mult, '+'.join(labels)
+
+
+def price_quote(vehicle_type, minutes, entry_at=None, coupon=None, booking_type=None):
+    """Full priced quote with dynamic rules (spec §7). Returns a breakdown dict:
+    {base, multiplier, surge_label, subtotal, discount, taxable, tax, tax_percent,
+     total}. `coupon` is an optional Coupon row. entry_at drives peak/weekend/
+     holiday. Server-authoritative; the app shows an estimate."""
+    base = amount_for(vehicle_type, minutes)
+    mult, label = _time_multiplier(entry_at)
+    subtotal = int(round(base * mult))
+    discount = 0
+    if coupon is not None and getattr(coupon, 'active', False):
+        if getattr(coupon, 'percent_off', 0):
+            discount += int(round(subtotal * coupon.percent_off / 100.0))
+        if getattr(coupon, 'flat_off', 0):
+            discount += int(coupon.flat_off)
+        discount = min(discount, subtotal)
+    taxable = max(0, subtotal - discount)
+    tax_pct = _cfg_float('park_tax_percent')
+    tax = int(round(taxable * tax_pct / 100.0)) if tax_pct else 0
+    total = taxable + tax
+    return {
+        "base": base, "multiplier": round(mult, 2), "surge_label": label,
+        "subtotal": subtotal, "discount": discount, "taxable": taxable,
+        "tax": tax, "tax_percent": tax_pct, "total": total,
+    }
 
 
 # ── SSE broker ────────────────────────────────────────────────────────────────
@@ -305,9 +430,13 @@ def _sync_legacy_status(reservation):
 
 
 # ── State transitions (each atomic) ───────────────────────────────────────────
-def hold_slot(slot_id, driver, plate, vehicle_type, hours=None):
+def hold_slot(slot_id, driver, plate, vehicle_type, hours=None,
+              booking_type=None, days=None, start_at=None):
     """AVAILABLE → HELD for this driver, atomically. Creates a reservation in
-    OTP_PENDING and issues an OTP. Returns (reservation, dev_code, error)."""
+    OTP_PENDING and issues an OTP. Returns (reservation, dev_code, error).
+
+    booking_type / days / start_at support the booking-type + advance-booking
+    features (spec §2, §5); defaults reproduce the original 'book now' behaviour."""
     now = _now()
     hold_until = now + timedelta(seconds=cfg_int('park_hold_seconds'))
     r1 = db.session.execute(text(
@@ -319,12 +448,13 @@ def hold_slot(slot_id, driver, plate, vehicle_type, hours=None):
         db.session.rollback()
         return None, None, 'slot_unavailable'
     slot = db.session.get(ParkingSlot, slot_id)  # label/block/yard unchanged by UPDATE
-    hours = hours or cfg_int('park_default_reservation_hours')
+    start, end, scheduled = booking_window(booking_type, hours, days, start_at)
     r = DriverReservation(
         driver_id=driver.id, yard_name=_yard_name(slot.yard_id),
         vehicle_plate=plate, vehicle_type=vehicle_type or 'Car',
         slot_label=slot.label, slot_id=slot.id, block_id=slot.block_id,
-        location_id=slot.yard_id, start_at=now, end_at=now + timedelta(hours=hours),
+        location_id=slot.yard_id, start_at=start, end_at=end,
+        booking_type=(booking_type or 'hourly').lower(), scheduled=scheduled,
         state='OTP_PENDING', held_until=hold_until)
     _sync_legacy_status(r)
     db.session.add(r)
@@ -400,8 +530,21 @@ def release_slot(reservation, terminal_state='COMPLETED', legacy='consumed', eve
     reservation.exited_at = reservation.exited_at or now
     if terminal_state == 'COMPLETED':
         reservation.completed_at = now
-        # Server-authoritative final amount from actual parked minutes.
-        reservation.amount = amount_for(reservation.vehicle_type, reservation.duration_minutes())
+        # Server-authoritative final amount from actual parked minutes, with
+        # dynamic pricing (peak/weekend/holiday), an optional coupon and tax.
+        coupon = None
+        if getattr(reservation, 'coupon_code', None):
+            from database import Coupon
+            coupon = Coupon.query.filter(
+                db.func.lower(Coupon.code) == reservation.coupon_code.lower()).first()
+            if coupon and not coupon.is_valid():
+                coupon = None
+        quote = price_quote(reservation.vehicle_type, reservation.duration_minutes(),
+                            entry_at=reservation.occupied_at, coupon=coupon,
+                            booking_type=reservation.booking_type)
+        reservation.amount = quote["total"]
+        if coupon:
+            coupon.used_count = (coupon.used_count or 0) + 1
     elif terminal_state == 'CANCELLED':
         reservation.cancelled_at = now
     db.session.commit()

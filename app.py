@@ -23,7 +23,7 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       DriverNotification, ImageBlob, PrintJob,
                       ParkingBlock, ParkingZone, ParkingSlot, OtpVerification, SlotWatcher,
                       DeviceToken, Company, CompanyAllocation, Vehicle,
-                      Organization, GatekeeperAllocation,
+                      Organization, GatekeeperAllocation, Coupon,
                       SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
                       SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
 import parking_core as park
@@ -6127,7 +6127,24 @@ def _park_hold_and_respond(drv, sid, data):
         hours = int(hours) if hours else None
     except (TypeError, ValueError):
         hours = None
-    r, dev_code, err = park.hold_slot(sid, drv, plate, vtype, hours)
+    days = data.get('days')
+    try:
+        days = int(days) if days else None
+    except (TypeError, ValueError):
+        days = None
+    booking_type = (data.get('booking_type') or 'hourly').strip().lower()
+    if booking_type not in park.BOOKING_TYPES:
+        booking_type = 'hourly'
+    # Advance booking: optional future ISO start (spec §2).
+    start_at = None
+    raw_start = (data.get('start_at') or '').strip()
+    if raw_start:
+        try:
+            start_at = datetime.fromisoformat(raw_start.replace('Z', ''))
+        except (TypeError, ValueError):
+            start_at = None
+    r, dev_code, err = park.hold_slot(sid, drv, plate, vtype, hours,
+                                      booking_type=booking_type, days=days, start_at=start_at)
     if err:
         return _park_err(err)
     # Snapshot company/basement/employee onto the booking so historical reports
@@ -6144,6 +6161,12 @@ def _park_hold_and_respond(drv, sid, data):
             r.zone_id = slot.zone_id
             r.zone_name = _z.name if _z else None
         r.employee_id = drv.employee_id
+        # Coupon (spec §7): store the code if it's a valid coupon; applied at exit.
+        ccode = (data.get('coupon_code') or '').strip()
+        if ccode:
+            _cp = Coupon.query.filter(db.func.lower(Coupon.code) == ccode.lower()).first()
+            if _cp and _cp.is_valid():
+                r.coupon_code = _cp.code
         # Organization snapshot + gatekeeper-approval gating.
         oid = getattr(drv, 'organization_id', None)
         if not oid and drv.company_id:
@@ -6166,6 +6189,84 @@ def _park_hold_and_respond(drv, sid, data):
     payload['otp_dev'] = dev_code  # shown on-screen (no SMS provider yet)
     payload['otp_sent_to'] = park._mask(drv.phone or drv.email)
     return jsonify(payload)
+
+
+@app.route('/api/park/quote', methods=['POST'])
+@_driver_auth_required
+def api_park_quote():
+    """Priced estimate with dynamic rules + optional coupon (spec §7). The final
+    amount is still computed server-side at exit from actual parked minutes."""
+    drv = request.driver
+    d = request.get_json(silent=True) or {}
+    vtype = (d.get('vehicle_type') or drv.primary_type or 'Car')
+    try:
+        minutes = int(d.get('minutes') or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    coupon = None
+    coupon_invalid = False
+    ccode = (d.get('coupon_code') or '').strip()
+    if ccode:
+        coupon = Coupon.query.filter(db.func.lower(Coupon.code) == ccode.lower()).first()
+        if not coupon or not coupon.is_valid():
+            coupon, coupon_invalid = None, True
+    q = park.price_quote(vtype, minutes, entry_at=datetime.utcnow(),
+                         coupon=coupon, booking_type=d.get('booking_type'))
+    q['coupon_valid'] = coupon is not None
+    q['coupon_invalid'] = coupon_invalid
+    return jsonify(q)
+
+
+@app.route('/api/park/coupon/<code>')
+@_driver_auth_required
+def api_park_coupon(code):
+    """Validate a coupon code for the app before booking."""
+    cp = Coupon.query.filter(db.func.lower(Coupon.code) == (code or '').strip().lower()).first()
+    if not cp or not cp.is_valid():
+        return jsonify({"valid": False, "code": (code or '').upper()}), 404
+    return jsonify({"valid": True, **cp.to_dict()})
+
+
+@app.route('/api/admin/coupons', methods=['GET', 'POST'])
+@admin_required
+def api_admin_coupons():
+    if request.method == 'POST':
+        d = request.json or {}
+        code = (d.get('code') or '').strip().upper()
+        if not code:
+            return jsonify({"status": "error", "message": "Coupon code is required"}), 400
+        if Coupon.query.filter(db.func.lower(Coupon.code) == code.lower()).first():
+            return jsonify({"status": "error", "message": "That code already exists"}), 400
+        cp = Coupon(code=code, description=(d.get('description') or '').strip() or None,
+                    percent_off=int(d.get('percent_off') or 0),
+                    flat_off=int(d.get('flat_off') or 0),
+                    active=d.get('active', True) is not False,
+                    max_uses=(int(d['max_uses']) if d.get('max_uses') else None))
+        db.session.add(cp)
+        db.session.commit()
+        AuditEvent.log(f"Coupon created: {code}", 'Admin')
+        return jsonify({"status": "ok", "coupon": cp.to_dict()})
+    return jsonify([c.to_dict() for c in Coupon.query.order_by(Coupon.code).all()])
+
+
+@app.route('/api/admin/coupons/<int:cid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_coupon(cid):
+    cp = Coupon.query.get(cid)
+    if not cp:
+        return jsonify({"status": "error", "message": "coupon not found"}), 404
+    if request.method == 'DELETE':
+        db.session.delete(cp)
+        db.session.commit()
+        return jsonify({"status": "ok"})
+    d = request.json or {}
+    if 'description' in d: cp.description = (d.get('description') or '').strip() or None
+    if 'percent_off' in d: cp.percent_off = int(d.get('percent_off') or 0)
+    if 'flat_off' in d:    cp.flat_off = int(d.get('flat_off') or 0)
+    if 'active' in d:      cp.active = bool(d.get('active'))
+    if 'max_uses' in d:    cp.max_uses = int(d['max_uses']) if d.get('max_uses') else None
+    db.session.commit()
+    return jsonify({"status": "ok", "coupon": cp.to_dict()})
 
 
 @app.route('/api/park/reservations/<int:rid>/confirm-otp', methods=['POST'])
