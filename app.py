@@ -23,10 +23,12 @@ from database import (db, Whitelist, AccessLog, Tariff, ParkingTransaction,
                       DriverNotification, ImageBlob, PrintJob,
                       ParkingBlock, ParkingZone, ParkingSlot, OtpVerification, SlotWatcher,
                       DeviceToken, Company, CompanyAllocation, Vehicle,
+                      Organization, GatekeeperAllocation,
                       SLOT_AVAILABLE, SLOT_HELD, SLOT_RESERVED, SLOT_OCCUPIED,
                       SLOT_DISABLED, SLOT_OUT_OF_SERVICE, SLOT_STATUSES)
 import parking_core as park
 import company_core as company
+import gatekeeper_core as gate
 import fcm_push
 from api_integration import clean_plate_number
 from sqlalchemy import or_
@@ -4627,9 +4629,11 @@ def _apply_yard_solution(row, data):
             if k in caps:
                 setattr(row, f'cap_{k}', bool(caps.get(k)))
     # Location detail fields (a Yard IS the "Location"). Only touch keys present.
-    for fld in ('address', 'city', 'state', 'country', 'status'):
+    for fld in ('address', 'city', 'state', 'country', 'status', 'category'):
         if fld in data:
             setattr(row, fld, (data.get(fld) or '').strip() or None)
+    if 'organization_id' in data:
+        row.organization_id = data.get('organization_id') or None
     for fld in ('latitude', 'longitude'):
         if fld in data:
             try:
@@ -6114,6 +6118,16 @@ def api_park_hold(sid):
             r.zone_id = slot.zone_id
             r.zone_name = _z.name if _z else None
         r.employee_id = drv.employee_id
+        # Organization snapshot + gatekeeper-approval gating.
+        oid = getattr(drv, 'organization_id', None)
+        if not oid and drv.company_id:
+            _co2 = db.session.get(Company, drv.company_id)
+            oid = _co2.organization_id if _co2 else None
+        r.organization_id = oid
+        if oid:
+            _org = db.session.get(Organization, oid)
+            if _org and _org.requires_gatekeeper_approval:
+                r.approval_status = 'PENDING'
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -6957,6 +6971,223 @@ def _slot_utilization(rows):
 @_driver_auth_required
 def api_mobile_master_data():
     return jsonify(company.master_data(request.driver))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ADMIN: Organizations + gatekeeper allocation (org-level, not company-level)
+# ═════════════════════════════════════════════════════════════════════════════
+@app.route('/api/admin/organizations', methods=['GET', 'POST'])
+@admin_required
+def api_admin_organizations():
+    if request.method == 'POST':
+        d = request.json or {}
+        name = (d.get('name') or '').strip()
+        if not name:
+            return jsonify({"status": "error", "message": "Organization name is required"}), 400
+        if Organization.query.filter(db.func.lower(Organization.name) == name.lower()).first():
+            return jsonify({"status": "error", "message": f"Organization '{name}' already exists"}), 400
+        o = Organization(name=name, code=(d.get('code') or '').strip() or None,
+                         status=(d.get('status') or 'active'),
+                         requires_gatekeeper_approval=bool(d.get('requires_gatekeeper_approval')))
+        db.session.add(o)
+        db.session.commit()
+        AuditEvent.log(f"Organization created: {name}", 'Admin')
+        return jsonify({"status": "ok", "organization": o.to_dict()})
+    return jsonify([o.to_dict() for o in Organization.query.order_by(Organization.name).all()])
+
+
+@app.route('/api/admin/organizations/<int:oid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_organization(oid):
+    o = Organization.query.get(oid)
+    if not o:
+        return jsonify({"status": "error", "message": "organization not found"}), 404
+    if request.method == 'DELETE':
+        GatekeeperAllocation.query.filter_by(organization_id=oid).delete()
+        db.session.delete(o)
+        db.session.commit()
+        AuditEvent.log(f"Organization deleted: {o.name}", 'Admin')
+        return jsonify({"status": "ok"})
+    d = request.json or {}
+    if 'name' in d:   o.name = (d.get('name') or o.name).strip()
+    if 'code' in d:   o.code = (d.get('code') or '').strip() or None
+    if 'status' in d: o.status = (d.get('status') or 'active')
+    if 'requires_gatekeeper_approval' in d:
+        o.requires_gatekeeper_approval = bool(d.get('requires_gatekeeper_approval'))
+    db.session.commit()
+    return jsonify({"status": "ok", "organization": o.to_dict()})
+
+
+@app.route('/api/admin/organizations/<int:oid>/gatekeepers', methods=['GET', 'POST'])
+@admin_required
+def api_admin_org_gatekeepers(oid):
+    o = Organization.query.get(oid)
+    if not o:
+        return jsonify({"status": "error", "message": "organization not found"}), 404
+    if request.method == 'POST':
+        d = request.json or {}
+        gid = d.get('gatekeeper_id')
+        # Either assign an existing driver as gatekeeper, or create a new one.
+        if gid:
+            u = DriverUser.query.get(gid)
+            if not u:
+                return jsonify({"status": "error", "message": "user not found"}), 404
+        else:
+            name = (d.get('name') or '').strip()
+            email = (d.get('email') or '').strip().lower()
+            pwd = (d.get('password') or '').strip()
+            if not name or not email or not pwd:
+                return jsonify({"status": "error", "message": "name, email, password required"}), 400
+            if DriverUser.query.filter_by(email=email).first():
+                return jsonify({"status": "error", "message": "email already exists"}), 409
+            u = DriverUser(name=name, email=email, phone=(d.get('phone') or '').strip() or None)
+            u.set_password(pwd)
+            db.session.add(u)
+            db.session.flush()
+        u.role = 'gatekeeper'
+        u.organization_id = oid
+        row = GatekeeperAllocation.query.filter_by(gatekeeper_id=u.id, organization_id=oid).first()
+        if row:
+            row.active = True
+        else:
+            db.session.add(GatekeeperAllocation(gatekeeper_id=u.id, organization_id=oid, active=True))
+        db.session.commit()
+        AuditEvent.log(f"Gatekeeper {u.email} allocated to {o.name}", 'Admin')
+        return jsonify({"status": "ok", "gatekeeper": u.to_dict()})
+    # GET — list allocations with gatekeeper details
+    rows = GatekeeperAllocation.query.filter_by(organization_id=oid).all()
+    ids = [r.gatekeeper_id for r in rows]
+    users = {u.id: u for u in DriverUser.query.filter(DriverUser.id.in_(ids)).all()} if ids else {}
+    out = []
+    for r in rows:
+        u = users.get(r.gatekeeper_id)
+        out.append({**r.to_dict(),
+                    "name": u.name if u else "", "email": u.email if u else "",
+                    "phone": (u.phone or "") if u else ""})
+    return jsonify(out)
+
+
+@app.route('/api/admin/organizations/<int:oid>/gatekeepers/<int:gid>', methods=['PUT', 'DELETE'])
+@admin_required
+def api_admin_org_gatekeeper(oid, gid):
+    row = GatekeeperAllocation.query.filter_by(organization_id=oid, gatekeeper_id=gid).first()
+    if not row:
+        return jsonify({"status": "error", "message": "allocation not found"}), 404
+    if request.method == 'DELETE':
+        # deactivate (preserve history) rather than hard-delete
+        row.active = False
+        db.session.commit()
+        AuditEvent.log(f"Gatekeeper {gid} removed from org {oid}", 'Admin')
+        return jsonify({"status": "ok"})
+    row.active = bool((request.json or {}).get('active', True))
+    db.session.commit()
+    return jsonify({"status": "ok", "allocation": row.to_dict()})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# GATEKEEPER (mobile): org-scoped bookings, scan, approve, reject
+# ═════════════════════════════════════════════════════════════════════════════
+def _require_gatekeeper():
+    """Returns (driver, None) if the caller is a gatekeeper with >=1 active org,
+    else (None, error_response)."""
+    drv = request.driver
+    if not gate.is_gatekeeper(drv):
+        return None, (jsonify({"error": "Not a gatekeeper account.", "code": "not_gatekeeper"}), 403)
+    if not gate.active_org_ids(drv):
+        return None, (jsonify({"error": "No active organization allocation.", "code": "no_allocation"}), 403)
+    return drv, None
+
+
+@app.route('/api/gate/orgs')
+@_driver_auth_required
+def api_gate_orgs():
+    drv = request.driver
+    if not gate.is_gatekeeper(drv):
+        return jsonify({"error": "Not a gatekeeper account.", "code": "not_gatekeeper"}), 403
+    return jsonify({"organizations": gate.orgs_for(drv)})
+
+
+@app.route('/api/gate/bookings')
+@_driver_auth_required
+def api_gate_bookings():
+    drv, err = _require_gatekeeper()
+    if err:
+        return err
+    org_id = request.args.get('org', type=int)
+    status = request.args.get('status')
+    rows = gate.bookings_for(drv, org_id=org_id, status=status)
+    names = {}
+    ids = {r.driver_id for r in rows}
+    if ids:
+        for u in DriverUser.query.filter(DriverUser.id.in_(ids)).all():
+            names[u.id] = u.name
+    out = []
+    for r in rows:
+        d = r.to_dict()
+        d['employee_name'] = names.get(r.driver_id, '')
+        out.append(d)
+    return jsonify({"bookings": out})
+
+
+@app.route('/api/gate/scan', methods=['POST'])
+@_driver_auth_required
+def api_gate_scan():
+    """Gatekeeper scans an EMPLOYEE's pass. Validates the signed token + that the
+    booking's org is one this gatekeeper is authorized for. Returns booking
+    details for the approve/reject decision (no state change)."""
+    drv, err = _require_gatekeeper()
+    if err:
+        return err
+    raw = ((request.get_json(silent=True) or {}).get('data') or '').strip()
+    tok = raw.split('/v/', 1)[1].strip().strip('/') if '/v/' in raw else raw
+    parsed = _verify_pass_token(tok)
+    if not parsed or parsed[0] != 'r':
+        return jsonify({"error": "Not a valid VayAccess parking pass.", "code": "invalid_qr"}), 400
+    r = DriverReservation.query.get(parsed[1])
+    ok, reason = gate.can_act_on(drv, r)
+    if not ok:
+        msg = {"not_found": "Booking not found.", "no_org": "Booking has no organization.",
+               "cross_org": "This booking is not in your organization."}.get(reason, reason)
+        return jsonify({"error": msg, "code": reason}), 403 if reason == 'cross_org' else 404
+    emp = db.session.get(DriverUser, r.driver_id)
+    d = r.to_dict()
+    d['employee_name'] = emp.name if emp else ''
+    d['employee_email'] = emp.email if emp else ''
+    return jsonify({"status": "ok", "booking": d})
+
+
+@app.route('/api/gate/approve', methods=['POST'])
+@_driver_auth_required
+def api_gate_approve():
+    drv, err = _require_gatekeeper()
+    if err:
+        return err
+    rid = (request.get_json(silent=True) or {}).get('reservation_id')
+    r = DriverReservation.query.get(rid)
+    ok, reason = gate.can_act_on(drv, r)
+    if not ok:
+        return jsonify({"error": "Not authorized for this booking.", "code": reason}), 403
+    r2, e = gate.approve(drv, r)
+    if e:
+        return jsonify({"error": _PARK_ERRORS.get(e, e), "code": e}), 409
+    return jsonify({"status": "ok", "booking": r2.to_dict()})
+
+
+@app.route('/api/gate/reject', methods=['POST'])
+@_driver_auth_required
+def api_gate_reject():
+    drv, err = _require_gatekeeper()
+    if err:
+        return err
+    d = request.get_json(silent=True) or {}
+    r = DriverReservation.query.get(d.get('reservation_id'))
+    ok, reason = gate.can_act_on(drv, r)
+    if not ok:
+        return jsonify({"error": "Not authorized for this booking.", "code": reason}), 403
+    r2, e = gate.reject(drv, r, d.get('reason'))
+    if e:
+        return jsonify({"error": _PARK_ERRORS.get(e, e), "code": e}), 409
+    return jsonify({"status": "ok", "booking": r2.to_dict()})
 
 
 @app.route('/api/driver/register', methods=['POST'])

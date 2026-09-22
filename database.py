@@ -173,14 +173,20 @@ def migrate_schema(engine):
         ("latitude",     "DOUBLE PRECISION"),
         ("longitude",    "DOUBLE PRECISION"),
         ("status",       "VARCHAR(20)"),
+        ("organization_id", "INTEGER"),
+        ("category",     "VARCHAR(40)"),
     ]
-    # Org/tenancy columns on driver users (employees) + parking slots.
+    # Org/tenancy columns on driver users (employees) + parking slots + companies.
     driver_users_new = [
         ("company_id",  "INTEGER"),
+        ("organization_id", "INTEGER"),
         ("location_id", "INTEGER"),
         ("employee_id", "VARCHAR(40)"),
         ("role",        "VARCHAR(30)"),
         ("status",      "VARCHAR(20)"),
+    ]
+    companies_new = [
+        ("organization_id", "INTEGER"),
     ]
     parking_slots_new = [
         ("company_id",  "INTEGER"),
@@ -197,6 +203,12 @@ def migrate_schema(engine):
         ("zone_id",         "INTEGER"),
         ("zone_name",       "VARCHAR(80)"),
         ("employee_id",     "VARCHAR(40)"),
+        ("organization_id", "INTEGER"),
+        ("approval_status", "VARCHAR(20)"),
+        ("approved_by",     "INTEGER"),
+        ("approved_at",     "TIMESTAMP"),
+        ("rejected_at",     "TIMESTAMP"),
+        ("reject_reason",   "VARCHAR(200)"),
         ("booking_code",    "VARCHAR(30)"),
         ("state",           "VARCHAR(20)"),
         ("held_until",      "TIMESTAMP"),
@@ -230,6 +242,7 @@ def migrate_schema(engine):
                             ('accounts',    accounts_new),
                             ('parking_transactions', parking_transactions_new),
                             ('yards',       yards_new),
+                            ('companies',             companies_new),
                             ('driver_users',          driver_users_new),
                             ('parking_slots',         parking_slots_new),
                             ('driver_reservations',   driver_reservations_new),
@@ -553,6 +566,8 @@ class Yard(db.Model):
     latitude  = db.Column(db.Float, nullable=True)
     longitude = db.Column(db.Float, nullable=True)
     status    = db.Column(db.String(20), nullable=True, default='active')  # active / inactive
+    organization_id = db.Column(db.Integer, nullable=True, index=True)  # -> organizations.id
+    category  = db.Column(db.String(40), nullable=True)  # Mall / Street / Private / ... (configurable)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def occupied(self):
@@ -580,6 +595,8 @@ class Yard(db.Model):
             "latitude":  self.latitude,
             "longitude": self.longitude,
             "status":    self.status or "active",
+            "organization_id": self.organization_id,
+            "category":  self.category or "",
             "caps": {
                 "anpr":     bool(self.cap_anpr),
                 "rfid":     bool(self.cap_rfid),
@@ -783,9 +800,10 @@ class DriverUser(db.Model):
     # self-service drivers leave these NULL and keep working unchanged. Rolled
     # onto existing DBs by migrate_schema (driver_users_new).
     company_id    = db.Column(db.Integer, nullable=True, index=True)   # -> companies.id
+    organization_id = db.Column(db.Integer, nullable=True, index=True) # -> organizations.id
     location_id   = db.Column(db.Integer, nullable=True, index=True)   # -> yards.id (denormalised from company)
     employee_id   = db.Column(db.String(40), nullable=True, index=True)  # HR/employee code, e.g. EMP1001
-    role          = db.Column(db.String(30), nullable=True, default='employee')  # employee / company_admin
+    role          = db.Column(db.String(30), nullable=True, default='employee')  # employee / company_admin / gatekeeper
     status        = db.Column(db.String(20), nullable=True, default='active')    # active / inactive
 
     def set_password(self, raw):
@@ -805,6 +823,7 @@ class DriverUser(db.Model):
             "primary_type":  self.primary_type  or "Car",
             "fastag_id":     self.fastag_id     or "",
             "company_id":    self.company_id,
+            "organization_id": self.organization_id,
             "location_id":   self.location_id,
             "employee_id":   self.employee_id or "",
             "role":          self.role or "employee",
@@ -860,6 +879,15 @@ class DriverReservation(db.Model):
     block_id        = db.Column(db.Integer,     nullable=True)               # -> parking_blocks.id
     location_id     = db.Column(db.Integer,     nullable=True, index=True)   # -> yards.id
     company_id      = db.Column(db.Integer,     nullable=True, index=True)   # -> companies.id
+    organization_id = db.Column(db.Integer,     nullable=True, index=True)   # -> organizations.id
+    # Gatekeeper approval workflow (added 2026-09-22). approval_status is
+    # separate from the slot lifecycle `state`: NONE (self-service, no gate),
+    # PENDING (awaiting gatekeeper), APPROVED, REJECTED.
+    approval_status = db.Column(db.String(20),  nullable=True)
+    approved_by     = db.Column(db.Integer,     nullable=True)   # gatekeeper driver_user id
+    approved_at     = db.Column(db.DateTime,    nullable=True)
+    rejected_at     = db.Column(db.DateTime,    nullable=True)
+    reject_reason   = db.Column(db.String(200), nullable=True)
     # Denormalised snapshots so historical reports stay correct even if the
     # company/basement is later renamed or re-allocated (spec 26). Added 2026-09-19.
     company_name    = db.Column(db.String(120), nullable=True)
@@ -909,6 +937,11 @@ class DriverReservation(db.Model):
             "basement_name":  self.basement_name or "",
             "zone_name":      self.zone_name or "",
             "employee_id":    self.employee_id or "",
+            "organization_id": self.organization_id,
+            "approval_status": self.approval_status or "",
+            "approved_at":    to_ist(self.approved_at, "%Y-%m-%d %H:%M") or "",
+            "rejected_at":    to_ist(self.rejected_at, "%Y-%m-%d %H:%M") or "",
+            "reject_reason":  self.reject_reason or "",
             "vehicle_plate":  self.vehicle_plate,
             "vehicle_type":   self.vehicle_type,
             "slot_label":     self.slot_label or "",
@@ -1198,6 +1231,58 @@ class DeviceToken(db.Model):
         }
 
 
+# ── Organization (top parent) + gatekeeper allocation (added 2026-09-22) ─────
+# Organization -> Companies + Facilities(Yards) + Employees. Gatekeepers are
+# allocated to an ORGANIZATION (not a company) and approve/reject bookings.
+class Organization(db.Model):
+    __tablename__ = 'organizations'
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(160), nullable=False)
+    code        = db.Column(db.String(40),  nullable=True)
+    status      = db.Column(db.String(20),  nullable=True, default='active')  # active/inactive
+    # When True, a booking in this org must be approved by a gatekeeper before
+    # it is occupied. When False, existing self-service booking is unchanged.
+    requires_gatekeeper_approval = db.Column(db.Boolean, default=False)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def gatekeeper_count(self):
+        return GatekeeperAllocation.query.filter_by(organization_id=self.id, active=True).count()
+
+    def to_dict(self, with_counts=True):
+        d = {
+            "id": self.id, "name": self.name, "code": self.code or "",
+            "status": self.status or "active",
+            "requires_gatekeeper_approval": bool(self.requires_gatekeeper_approval),
+            "created_at": to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
+        }
+        if with_counts:
+            d["gatekeepers"] = self.gatekeeper_count()
+            d["companies"] = Company.query.filter_by(organization_id=self.id).count()
+            d["facilities"] = Yard.query.filter_by(organization_id=self.id).count()
+            d["employees"] = DriverUser.query.filter_by(organization_id=self.id).count()
+        return d
+
+
+class GatekeeperAllocation(db.Model):
+    """Assigns a gatekeeper (DriverUser with role='gatekeeper') to an
+    organization. Org-level, not company-level. Deactivating (active=False)
+    revokes access without deleting history."""
+    __tablename__ = 'gatekeeper_allocations'
+    id              = db.Column(db.Integer, primary_key=True)
+    gatekeeper_id   = db.Column(db.Integer, nullable=False, index=True)   # -> driver_users.id
+    organization_id = db.Column(db.Integer, nullable=False, index=True)   # -> organizations.id
+    active          = db.Column(db.Boolean, default=True)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('gatekeeper_id', 'organization_id', name='uq_gk_org'),)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "gatekeeper_id": self.gatekeeper_id,
+            "organization_id": self.organization_id, "active": bool(self.active),
+            "created_at": to_ist(self.created_at, "%Y-%m-%d %H:%M") or "",
+        }
+
+
 # ── Org / tenancy: Company + Company slot allocation (added 2026-09-19) ───────
 # A Company belongs to one Location (Yard). Employees (DriverUser.company_id)
 # belong to a Company. Slots are allocated to a company via ParkingSlot.company_id;
@@ -1207,6 +1292,7 @@ class Company(db.Model):
     __tablename__ = 'companies'
     id         = db.Column(db.Integer, primary_key=True)
     yard_id    = db.Column(db.Integer, db.ForeignKey('yards.id'), nullable=False, index=True)  # location
+    organization_id = db.Column(db.Integer, nullable=True, index=True)  # -> organizations.id
     name       = db.Column(db.String(120), nullable=False)
     code       = db.Column(db.String(30),  nullable=True)
     status     = db.Column(db.String(20),  nullable=True, default='active')  # active / inactive
@@ -1222,6 +1308,7 @@ class Company(db.Model):
         d = {
             "id":          self.id,
             "location_id": self.yard_id,
+            "organization_id": self.organization_id,
             "name":        self.name,
             "code":        self.code or "",
             "status":      self.status or "active",
