@@ -1259,7 +1259,11 @@ class Organization(db.Model):
             d["gatekeepers"] = self.gatekeeper_count()
             d["companies"] = Company.query.filter_by(organization_id=self.id).count()
             d["facilities"] = Yard.query.filter_by(organization_id=self.id).count()
-            d["employees"] = DriverUser.query.filter_by(organization_id=self.id).count()
+            # Employees = the people who park; exclude gatekeepers (also DriverUsers
+            # with this org set) so they are only counted in the gatekeepers column.
+            d["employees"] = (DriverUser.query.filter_by(organization_id=self.id)
+                              .filter(db.or_(DriverUser.role.is_(None),
+                                             DriverUser.role != 'gatekeeper')).count())
         return d
 
 
