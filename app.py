@@ -6269,6 +6269,26 @@ def api_admin_coupon(cid):
     return jsonify({"status": "ok", "coupon": cp.to_dict()})
 
 
+# Dynamic-pricing rules (spec §7). Live-tunable Settings; read/written here so an
+# admin can configure peak/weekend/holiday/tax without touching the DB.
+_PRICING_KEYS = ('park_free_grace_minutes', 'park_peak_start', 'park_peak_end',
+                 'park_peak_multiplier', 'park_weekend_multiplier',
+                 'park_holiday_multiplier', 'park_holidays', 'park_tax_percent')
+
+
+@app.route('/api/admin/park/pricing', methods=['GET', 'POST'])
+@admin_required
+def api_admin_park_pricing():
+    if request.method == 'POST':
+        d = request.json or {}
+        for k in _PRICING_KEYS:
+            if k in d and d[k] is not None:
+                Setting.set(k, str(d[k]).strip())
+        AuditEvent.log("Parking pricing rules updated", area='Admin')
+        return jsonify({"status": "ok"})
+    return jsonify({k: park.cfg(k) for k in _PRICING_KEYS})
+
+
 @app.route('/api/park/reservations/<int:rid>/confirm-otp', methods=['POST'])
 @_driver_auth_required
 def api_park_confirm_otp(rid):
