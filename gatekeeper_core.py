@@ -37,7 +37,10 @@ def orgs_for(driver):
 
 
 def bookings_for(driver, org_id=None, status=None, limit=200):
-    """Bookings across the gatekeeper's authorized organizations."""
+    """Bookings across the gatekeeper's authorized organizations.
+
+    Only surfaces bookings the employee has actually confirmed (OTP done) — a
+    mid-OTP HELD/OTP_PENDING hold is not shown to the gatekeeper yet."""
     ids = active_org_ids(driver)
     if not ids:
         return []
@@ -46,6 +49,8 @@ def bookings_for(driver, org_id=None, status=None, limit=200):
         q = q.filter(DriverReservation.organization_id == org_id)
     if status:
         q = q.filter(DriverReservation.approval_status == status.upper())
+    # Exclude not-yet-confirmed holds so the record appears only once RESERVED.
+    q = q.filter(DriverReservation.state.notin_(['HELD', 'OTP_PENDING']))
     return q.order_by(DriverReservation.id.desc()).limit(limit).all()
 
 
