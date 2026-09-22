@@ -2225,6 +2225,7 @@ td, th, .epc, code, .scan-row dd,
 
 .sol-card-titles h3 { margin: 0; font-size: 1.15rem; font-weight: 800; }
 .sol-card-vert { font-size: 0.78rem; opacity: .9; font-weight: 700; }
+.sol-cat-badge { display:inline-block; margin-left:6px; padding:1px 8px; border-radius:999px; background:rgba(255,255,255,.28); font-size:.72rem; font-weight:800; letter-spacing:.02em; vertical-align:middle; }
 .sol-occ { margin: 4px 0 12px; }
 .sol-occ-nums { font-size: 1.05rem; font-weight: 700; }
 .sol-occ-nums b { font-size: 1.5rem; }

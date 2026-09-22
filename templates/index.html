@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260922-gate2">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260922-gate3">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -423,6 +423,13 @@
                     <option value="Shopping Mall">🛍️ Shopping Mall</option>
                     <option value="Corporate Campus">🏢 Corporate Campus</option>
                     <option value="Street Parking">🅿️ Street Parking</option>
+                  </select></label>
+                <label class="sol-field"><span>Parking category</span>
+                  <select id="sol-f-category">
+                    <option value="">— none —</option>
+                    <option value="Mall">🛍️ Mall</option>
+                    <option value="Street">🅿️ Street</option>
+                    <option value="Private">🔒 Private</option>
                   </select></label>
                 <div class="sol-field-row">
                   <label class="sol-field"><span>Capacity</span>
@@ -2666,6 +2673,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260922-gate2"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260922-gate3"></script>
   </body>
 </html>

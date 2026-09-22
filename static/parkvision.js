@@ -4442,7 +4442,9 @@ document.addEventListener('DOMContentLoaded', function () {
     return '<article class="sol-card ' + meta.cls + '">' +
       '<div class="sol-card-head"><span class="sol-emoji">' + meta.emoji + '</span>' +
         '<div class="sol-card-titles"><h3>' + solEsc(s.name) + '</h3>' +
-        '<span class="sol-card-vert">' + solEsc(s.site_type || 'Unconfigured') + '</span></div></div>' +
+        '<span class="sol-card-vert">' + solEsc(s.site_type || 'Unconfigured') +
+        (s.category ? ' <span class="sol-cat-badge">' + solEsc(s.category) + '</span>' : '') +
+        '</span></div></div>' +
       '<div class="sol-occ"><div class="sol-occ-nums"><b>' + occ + '</b> / ' + cap +
         ' <span>(' + Math.max(0, cap - occ) + ' free)</span></div>' +
         '<div class="sol-occ-bar"><i style="width:' + pct + '%"></i></div></div>' +
@@ -4478,6 +4480,7 @@ document.addEventListener('DOMContentLoaded', function () {
     setv('sol-f-state',   site ? (site.state || '') : '');
     setv('sol-f-country', site ? (site.country || '') : '');
     setv('sol-f-status',  site ? (site.status || 'active') : 'active');
+    setv('sol-f-category', site ? (site.category || '') : '');
     setv('sol-f-lat', site && site.latitude != null ? site.latitude : '');
     setv('sol-f-lng', site && site.longitude != null ? site.longitude : '');
     solPaintCapChecks(site ? site.caps : null);
@@ -4518,6 +4521,7 @@ document.addEventListener('DOMContentLoaded', function () {
       location: solGet('sol-f-location').value.trim(),
       address: gv('sol-f-address'), city: gv('sol-f-city'), state: gv('sol-f-state'),
       country: gv('sol-f-country'), status: gv('sol-f-status') || 'active',
+      category: gv('sol-f-category'),
       latitude: gv('sol-f-lat'), longitude: gv('sol-f-lng'),
       caps: solReadCaps()
     };
