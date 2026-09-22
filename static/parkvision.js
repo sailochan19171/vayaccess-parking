@@ -5543,22 +5543,43 @@ document.addEventListener('DOMContentLoaded', function () {
     pcmpLoadCompanies();
   }
   function pcmpLoadCompanies() {
-    aget('/api/admin/companies?location=' + cmp.loc).then(function (rows) {
+    // Load companies + the org list together so each row can show an Organization
+    // picker. Assigning a company to an org cascades to all its employees, whose
+    // bookings then group under that org (and require gatekeeper approval if set).
+    Promise.all([aget('/api/admin/companies?location=' + cmp.loc),
+                 aget('/api/admin/organizations').catch(function () { return []; })]).then(function (r) {
+      var rows = r[0] || [], orgs = r[1] || [];
+      cmp.orgs = orgs;
       var el = g('pcmp-companies');
       if (!rows.length) { el.innerHTML = '<div class="pk-empty">No companies yet. Use “+ Add Company”.</div>'; return; }
-      el.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Company</th><th>Employees</th><th>Allocated slots</th><th>Status</th><th></th></tr></thead><tbody>' +
+      var orgOpts = function (sel) {
+        return '<option value="">— none —</option>' + orgs.map(function (o) {
+          return '<option value="' + o.id + '"' + (o.id === sel ? ' selected' : '') + '>' + esc(o.name) + '</option>';
+        }).join('');
+      };
+      el.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Company</th><th>Organization</th><th>Employees</th><th>Allocated slots</th><th>Status</th><th></th></tr></thead><tbody>' +
         rows.map(function (c) {
-          return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + c.employees + '</td><td>' + c.allocated_slots + '</td>' +
+          return '<tr><td><b>' + esc(c.name) + '</b></td>' +
+            '<td><select data-org-for="' + c.id + '" style="padding:6px 8px;border:1px solid #cfd8e6;border-radius:8px;font-size:13px;background:#fff;max-width:180px">' + orgOpts(c.organization_id) + '</select></td>' +
+            '<td>' + c.employees + '</td><td>' + c.allocated_slots + '</td>' +
             '<td>' + esc(c.status) + '</td><td style="white-space:nowrap">' +
             '<button class="pk-btn pk-btn-sm" data-emp="' + c.id + '" data-name="' + esc(c.name) + '">Employees</button> ' +
             '<button class="pk-btn pk-btn-sm" data-alloc="' + c.id + '" data-name="' + esc(c.name) + '">Allocation</button> ' +
             '<button class="pk-btn pk-btn-sm" data-edit="' + c.id + '" data-name="' + esc(c.name) + '">Edit</button> ' +
             '<button class="pk-btn pk-btn-sm pk-btn-danger" data-del="' + c.id + '">Delete</button></td></tr>';
         }).join('') + '</tbody></table></div>';
+      el.querySelectorAll('[data-org-for]').forEach(function (s) { s.addEventListener('change', function () { pcmpSetOrg(parseInt(s.dataset.orgFor, 10), s.value ? parseInt(s.value, 10) : null); }); });
       el.querySelectorAll('[data-emp]').forEach(function (b) { b.addEventListener('click', function () { pcmpOpenEmp(parseInt(b.dataset.emp, 10), b.dataset.name); }); });
       el.querySelectorAll('[data-alloc]').forEach(function (b) { b.addEventListener('click', function () { pcmpOpenAlloc(parseInt(b.dataset.alloc, 10), b.dataset.name); }); });
       el.querySelectorAll('[data-edit]').forEach(function (b) { b.addEventListener('click', function () { pcmpEdit(parseInt(b.dataset.edit, 10), b.dataset.name); }); });
       el.querySelectorAll('[data-del]').forEach(function (b) { b.addEventListener('click', function () { pcmpDelete(parseInt(b.dataset.del, 10)); }); });
+    });
+  }
+  function pcmpSetOrg(cid, oid) {
+    asend('/api/admin/companies/' + cid, 'PUT', { organization_id: oid }).then(function (res) {
+      if (!res.ok) { toastFn('Failed to set organization.', 'error'); return; }
+      toastFn(oid ? 'Company linked to organization — its employees inherit it.' : 'Organization cleared.');
+      pcmpLoadCompanies();
     });
   }
   function pcmpAddCompany() {
@@ -5566,7 +5587,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var name = window.prompt('Company name:'); if (!name) return;
     asend('/api/admin/companies', 'POST', { name: name, location_id: cmp.loc }).then(function (res) {
       if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
-      toastFn('Company added.'); pcmpLoadCompanies();
+      toastFn('Company added — pick its Organization in the list to enable gatekeeper approval.'); pcmpLoadCompanies();
     });
   }
   function pcmpEdit(id, name) {

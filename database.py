@@ -1317,6 +1317,8 @@ class Company(db.Model):
         if with_counts:
             d["employees"] = self.employee_count()
             d["allocated_slots"] = self.allocated_count()
+            org = Organization.query.get(self.organization_id) if self.organization_id else None
+            d["organization_name"] = org.name if org else ""
         return d
 
 

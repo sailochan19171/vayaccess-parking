@@ -6728,7 +6728,8 @@ def api_admin_companies():
         if Company.query.filter_by(yard_id=yid).filter(db.func.lower(Company.name) == name.lower()).first():
             return jsonify({"status": "error", "message": f"Company '{name}' already exists at this location"}), 400
         c = Company(yard_id=yid, name=name, code=(data.get('code') or '').strip() or None,
-                    status=(data.get('status') or 'active'))
+                    status=(data.get('status') or 'active'),
+                    organization_id=(data.get('organization_id') or None))
         db.session.add(c)
         db.session.commit()
         AuditEvent.log(f"Company created: {name} @ {y.name}", 'Admin')
@@ -6759,6 +6760,13 @@ def api_admin_company(cid):
     if 'name' in d:   c.name = (d.get('name') or c.name).strip()
     if 'code' in d:   c.code = (d.get('code') or '').strip() or None
     if 'status' in d: c.status = (d.get('status') or 'active')
+    if 'organization_id' in d:
+        c.organization_id = d.get('organization_id') or None
+        # Cascade: every employee of this company inherits the new org, so their
+        # future bookings are grouped + gated correctly. (Existing bookings keep
+        # the org they were stamped with.)
+        DriverUser.query.filter_by(company_id=c.id).update(
+            {'organization_id': c.organization_id}, synchronize_session=False)
     db.session.commit()
     return jsonify({"status": "ok", "company": c.to_dict()})
 
@@ -7680,6 +7688,7 @@ def api_admin_driver_create():
         if co:
             u.company_id = co.id
             u.location_id = data.get('location_id') or co.yard_id
+            u.organization_id = co.organization_id   # employee inherits company's org
     elif data.get('location_id'):
         u.location_id = data.get('location_id')
     u.employee_id = (data.get('employee_id') or '').strip() or None
@@ -7740,8 +7749,10 @@ def api_admin_driver_update(did):
             if co:
                 u.company_id = co.id
                 u.location_id = data.get('location_id') or co.yard_id
+                u.organization_id = co.organization_id   # inherit company's org
         else:
             u.company_id = None
+            u.organization_id = None
     if 'employee_id' in data:
         u.employee_id = (data.get('employee_id') or '').strip() or None
     if 'status' in data:
