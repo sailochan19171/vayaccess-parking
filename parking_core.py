@@ -733,11 +733,16 @@ def sweep_expired(app):
             emit_slot_event('slot.expired', fresh, prev, SLOT_AVAILABLE)
             notify_watchers(fresh)
             n += 1
-        # 2) grace-expired reservations (confirmed but driver never arrived)
+        # 2) grace-expired reservations (confirmed but driver never arrived).
+        #    EXCLUDE bookings awaiting gatekeeper approval — those must stay
+        #    RESERVED until the gatekeeper approves/rejects (the employee cannot
+        #    self-occupy), otherwise the slot would be freed out from under them.
         stale_res = (DriverReservation.query
                      .filter(DriverReservation.state == 'RESERVED',
                              DriverReservation.grace_until.isnot(None),
-                             DriverReservation.grace_until < now).all())
+                             DriverReservation.grace_until < now,
+                             db.or_(DriverReservation.approval_status.is_(None),
+                                    DriverReservation.approval_status != 'PENDING')).all())
         for r in stale_res:
             slot = db.session.get(ParkingSlot, r.slot_id) if r.slot_id else None
             if slot and slot.status == SLOT_RESERVED:
