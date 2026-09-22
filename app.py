@@ -7310,21 +7310,37 @@ def api_gate_bookings():
     return jsonify({"bookings": out})
 
 
+def _resolve_pass_reservation(raw):
+    """Resolve a scanned or pasted value to a DriverReservation. Accepts a signed
+    pass token, a full /v/<token> URL, or a booking code (PK-YYYY-NNNNNN)."""
+    raw = (raw or '').strip()
+    if not raw:
+        return None
+    tok = raw.split('/v/', 1)[1].strip().strip('/') if '/v/' in raw else raw
+    parsed = _verify_pass_token(tok)
+    if parsed and parsed[0] == 'r':
+        r = DriverReservation.query.get(parsed[1])
+        if r:
+            return r
+    # Fall back to a booking code (case-insensitive), e.g. PK-2026-000123.
+    return DriverReservation.query.filter(
+        db.func.upper(DriverReservation.booking_code) == raw.upper()).first()
+
+
 @app.route('/api/gate/scan', methods=['POST'])
 @_driver_auth_required
 def api_gate_scan():
-    """Gatekeeper scans an EMPLOYEE's pass. Validates the signed token + that the
-    booking's org is one this gatekeeper is authorized for. Returns booking
-    details for the approve/reject decision (no state change)."""
+    """Gatekeeper scans an EMPLOYEE's pass. Accepts a signed QR token OR a booking
+    code, validates the booking's org is one this gatekeeper is authorized for,
+    and returns booking details for the approve/reject decision (no state change)."""
     drv, err = _require_gatekeeper()
     if err:
         return err
     raw = ((request.get_json(silent=True) or {}).get('data') or '').strip()
-    tok = raw.split('/v/', 1)[1].strip().strip('/') if '/v/' in raw else raw
-    parsed = _verify_pass_token(tok)
-    if not parsed or parsed[0] != 'r':
-        return jsonify({"error": "Not a valid VayAccess parking pass.", "code": "invalid_qr"}), 400
-    r = DriverReservation.query.get(parsed[1])
+    r = _resolve_pass_reservation(raw)
+    if r is None:
+        return jsonify({"error": "Not a valid VayAccess parking pass or booking code.",
+                        "code": "invalid_qr"}), 400
     ok, reason = gate.can_act_on(drv, r)
     if not ok:
         msg = {"not_found": "Booking not found.", "no_org": "Booking has no organization.",
