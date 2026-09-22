@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VayAccess Systems · Parking Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260922-gate3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260922-gate4">
     <style>
       /* ParkVision-specific add-ons on top of the VAY base styles */
       .live-feed-wrap        { position: relative; background: #000; border-radius: 12px;
@@ -270,6 +270,7 @@
             <button class="nav-item nav-child" data-view="park-companies"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M15 9h.01M9 13h.01M15 13h.01"/></svg></span>Companies &amp; Allocation</button>
             <button class="nav-item nav-child" data-view="park-bookings"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></span>Parking Bookings</button>
             <button class="nav-item nav-child" data-view="park-reports"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18M8 15l3-4 3 3 4-6"/></svg></span>Parking Reports</button>
+            <button class="nav-item nav-child" data-view="park-pricing"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>Pricing &amp; Coupons</button>
           </div>
 
           <!-- Parking Inquiry — expandable group -->
@@ -2620,6 +2621,36 @@
               <th>Slot</th><th>Bookings</th><th>Entries</th><th>Exits</th><th>Total hours</th><th>Avg duration</th><th>Utilization</th></tr></thead>
               <tbody id="prep-slot-body"></tbody></table></div></div>
         </section>
+
+        <!-- ══════════ SMART PARKING: Pricing & Coupons (admin) ══════════ -->
+        <section id="park-pricing" class="view">
+          <div class="pk-panel">
+            <div class="pk-panel-head"><h3>Dynamic pricing rules</h3>
+              <button class="pk-btn pk-btn-primary pk-btn-sm" id="ppr-save">Save rules</button></div>
+            <p class="pk-muted" style="margin:0 0 12px">Applied on top of the per-vehicle Tariff at exit. Multiplier 1.0 = disabled. Holiday overrides weekend; peak multiplies on top; tax is added last.</p>
+            <div class="pk-form-row">
+              <div class="pk-field pk-field-sm"><label>Free grace (min)</label><input id="ppr-grace" type="number" min="0"></div>
+              <div class="pk-field pk-field-sm"><label>Tax %</label><input id="ppr-tax" type="number" min="0" step="0.1"></div>
+            </div>
+            <div class="pk-form-row">
+              <div class="pk-field pk-field-sm"><label>Peak start (HH:MM)</label><input id="ppr-peak-start" placeholder="18:00"></div>
+              <div class="pk-field pk-field-sm"><label>Peak end (HH:MM)</label><input id="ppr-peak-end" placeholder="22:00"></div>
+              <div class="pk-field pk-field-sm"><label>Peak ×</label><input id="ppr-peak-mult" type="number" min="1" step="0.1"></div>
+            </div>
+            <div class="pk-form-row">
+              <div class="pk-field pk-field-sm"><label>Weekend ×</label><input id="ppr-weekend-mult" type="number" min="1" step="0.1"></div>
+              <div class="pk-field pk-field-sm"><label>Holiday ×</label><input id="ppr-holiday-mult" type="number" min="1" step="0.1"></div>
+            </div>
+            <div class="pk-field"><label>Holidays (comma-separated YYYY-MM-DD)</label>
+              <input id="ppr-holidays" placeholder="2026-01-26, 2026-08-15"></div>
+          </div>
+          <div class="pk-panel">
+            <div class="pk-panel-head"><h3>Coupons</h3>
+              <button class="pk-btn pk-btn-primary pk-btn-sm" id="pco-add">+ Add Coupon</button></div>
+            <p class="pk-muted" style="margin:0 0 10px">Discounts applied at billing. Percent and/or flat amount; optional usage cap.</p>
+            <div id="pco-list"></div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -2673,6 +2704,6 @@
     <!-- VAY ParkOps demo SPA: drives Entry/Exit/Tariffs/Reports + Dashboard metrics/vehicles/activity + Admin Users&Roles/Settings -->
     <script src="{{ url_for('static', filename='vay-app.js') }}"></script>
     <!-- ParkVision additions: live ANPR feed, current scan, access log, device cards, employee enrollment -->
-    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260922-gate3"></script>
+    <script src="{{ url_for('static', filename='parkvision.js') }}?v=20260922-gate4"></script>
   </body>
 </html>

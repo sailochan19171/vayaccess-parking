@@ -169,6 +169,7 @@ function switchView(name) {
     'park-setup': 'Parking Setup',    'park-companies': 'Companies & Allocation',
     'park-orgs': 'Organizations & Gatekeepers',
     'park-bookings': 'Parking Bookings', 'park-reports': 'Parking Reports',
+    'park-pricing': 'Pricing & Coupons',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
 }
@@ -5955,5 +5956,114 @@ document.addEventListener('DOMContentLoaded', function () {
   if (typeof switchView === 'function') {
     var _origO = switchView;
     switchView = function (n) { _origO(n); if (n === 'park-orgs') porgEnter(); };
+  }
+})();
+
+// ═══════════════ SMART PARKING ADMIN: Pricing rules & Coupons ════════════════
+(function () {
+  var g = function (id) { return document.getElementById(id); };
+  var esc = window._esc || function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+  };
+  var toastFn = function (m, k) { if (typeof toast === 'function') toast(m, k || 'ok'); };
+  function aget(url) { return fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }); }
+  function asend(url, method, body) {
+    return fetch(url, { method: method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }).catch(function () { return { ok: r.ok, d: {} }; }); });
+  }
+  function active(id) { var el = g(id); return el && el.classList.contains('active'); }
+  function sv(id, v) { var el = g(id); if (el) el.value = (v == null ? '' : v); }
+  function gv(id) { var el = g(id); return el ? el.value.trim() : ''; }
+
+  function pprEnter() { if (!active('park-pricing')) return; pprLoad(); pcoLoad(); }
+  function pprLoad() {
+    aget('/api/admin/park/pricing').then(function (d) {
+      sv('ppr-grace', d.park_free_grace_minutes);
+      sv('ppr-tax', d.park_tax_percent);
+      sv('ppr-peak-start', d.park_peak_start);
+      sv('ppr-peak-end', d.park_peak_end);
+      sv('ppr-peak-mult', d.park_peak_multiplier);
+      sv('ppr-weekend-mult', d.park_weekend_multiplier);
+      sv('ppr-holiday-mult', d.park_holiday_multiplier);
+      sv('ppr-holidays', d.park_holidays);
+    }).catch(function () {});
+  }
+  function pprSave() {
+    var body = {
+      park_free_grace_minutes: gv('ppr-grace') || '0',
+      park_tax_percent: gv('ppr-tax') || '0',
+      park_peak_start: gv('ppr-peak-start') || '18:00',
+      park_peak_end: gv('ppr-peak-end') || '22:00',
+      park_peak_multiplier: gv('ppr-peak-mult') || '1.0',
+      park_weekend_multiplier: gv('ppr-weekend-mult') || '1.0',
+      park_holiday_multiplier: gv('ppr-holiday-mult') || '1.0',
+      park_holidays: gv('ppr-holidays')
+    };
+    asend('/api/admin/park/pricing', 'POST', body).then(function (res) {
+      if (!res.ok) { toastFn('Failed to save.', 'error'); return; }
+      toastFn('Pricing rules saved.');
+    });
+  }
+
+  // ── Coupons ──────────────────────────────────────────────────────────────
+  function pcoLoad() {
+    aget('/api/admin/coupons').then(function (rows) {
+      var el = g('pco-list');
+      if (!rows || !rows.length) { el.innerHTML = '<div class="pk-empty">No coupons yet. Use “+ Add Coupon”.</div>'; return; }
+      el.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>' +
+        '<th>Code</th><th>Discount</th><th>Used</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows.map(function (c) {
+          var disc = (c.percent_off ? c.percent_off + '%' : '') + (c.percent_off && c.flat_off ? ' + ' : '') + (c.flat_off ? '\u20b9' + c.flat_off : '');
+          var used = (c.used_count || 0) + (c.max_uses ? ' / ' + c.max_uses : '');
+          var st = c.valid ? '<span class="pk-badge" style="background:#dcfce7;color:#166534">Active</span>'
+                           : '<span class="pk-badge" style="background:#fee2e2;color:#991b1b">Inactive</span>';
+          return '<tr><td><b>' + esc(c.code) + '</b>' + (c.description ? '<br><span class="pk-muted">' + esc(c.description) + '</span>' : '') + '</td>' +
+            '<td>' + (disc || '\u2014') + '</td><td>' + used + '</td><td>' + st + '</td>' +
+            '<td style="white-space:nowrap"><button class="pk-btn pk-btn-sm" data-toggle="' + c.id + '" data-on="' + (c.active ? 1 : 0) + '">' + (c.active ? 'Disable' : 'Enable') + '</button> ' +
+            '<button class="pk-btn pk-btn-sm pk-btn-danger" data-del="' + c.id + '">Delete</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
+      el.querySelectorAll('[data-toggle]').forEach(function (b) { b.addEventListener('click', function () { pcoToggle(parseInt(b.dataset.toggle, 10), b.dataset.on === '1'); }); });
+      el.querySelectorAll('[data-del]').forEach(function (b) { b.addEventListener('click', function () { pcoDelete(parseInt(b.dataset.del, 10)); }); });
+    }).catch(function () {});
+  }
+  function pcoAdd() {
+    var code = window.prompt('Coupon code (e.g. SAVE20):'); if (!code) return;
+    var pct = parseInt(window.prompt('Percent off (0-100, 0 for none):', '0'), 10) || 0;
+    var flat = parseInt(window.prompt('Flat off in \u20b9 (0 for none):', '0'), 10) || 0;
+    var maxu = window.prompt('Max uses (blank = unlimited):', '') || '';
+    var body = { code: code, percent_off: pct, flat_off: flat };
+    if (maxu) body.max_uses = parseInt(maxu, 10) || null;
+    asend('/api/admin/coupons', 'POST', body).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
+      toastFn('Coupon added.'); pcoLoad();
+    });
+  }
+  function pcoToggle(id, isOn) {
+    asend('/api/admin/coupons/' + id, 'PUT', { active: !isOn }).then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn(!isOn ? 'Coupon enabled.' : 'Coupon disabled.'); pcoLoad();
+    });
+  }
+  function pcoDelete(id) {
+    if (!window.confirm('Delete this coupon?')) return;
+    asend('/api/admin/coupons/' + id, 'DELETE').then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn('Deleted.'); pcoLoad();
+    });
+  }
+
+  function pprInit() {
+    var s = g('ppr-save'); if (s && !s._w) { s._w = 1; s.addEventListener('click', pprSave); }
+    var a = g('pco-add'); if (a && !a._w) { a._w = 1; a.addEventListener('click', pcoAdd); }
+    var btn = document.querySelector('.nav-item[data-view="park-pricing"]');
+    if (btn && !btn._w) { btn._w = 1; btn.addEventListener('click', pprEnter); }
+    if (active('park-pricing')) pprEnter();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pprInit); else pprInit();
+  if (typeof switchView === 'function') {
+    var _origP = switchView;
+    switchView = function (n) { _origP(n); if (n === 'park-pricing') pprEnter(); };
   }
 })();
