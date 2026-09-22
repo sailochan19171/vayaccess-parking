@@ -90,6 +90,29 @@ def can_book(driver, slot):
     return slot.company_id is None
 
 
+def pick_slot_for(driver, preference='auto', block_id=None, zone_id=None, slot_type=None):
+    """Resolve a booking preference to a single AVAILABLE slot the driver may book.
+
+    preference:
+      - 'exact'  -> caller passes an explicit slot elsewhere (not handled here)
+      - 'zone'   -> any available slot in `zone_id`
+      - 'block'  -> any available slot in `block_id` (floor/basement)
+      - 'auto'   -> nearest available across the driver's whole scope
+    Ordering uses display_order then label, so 'auto'/'nearest' is deterministic
+    and matches the physical numbering (nearest-to-entry when slots are ordered
+    from the entrance). Optional `slot_type` filters to ev/accessible/vip/etc.
+    Returns a ParkingSlot or None.
+    """
+    q = slots_query_for_driver(driver).filter(ParkingSlot.status == SLOT_AVAILABLE)
+    if zone_id:
+        q = q.filter(ParkingSlot.zone_id == zone_id)
+    if block_id:
+        q = q.filter(ParkingSlot.block_id == block_id)
+    if slot_type:
+        q = q.filter(ParkingSlot.slot_type == slot_type)
+    return q.order_by(ParkingSlot.display_order.asc(), ParkingSlot.label.asc()).first()
+
+
 # ── Consolidated master data (per authenticated user) ─────────────────────────
 def master_data(driver):
     """Everything the mobile app needs for THIS user — nothing about other

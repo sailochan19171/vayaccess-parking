@@ -6074,8 +6074,33 @@ def api_park_reservation_qr(rid):
 @app.route('/api/park/slots/<int:sid>/hold', methods=['POST'])
 @_driver_auth_required
 def api_park_hold(sid):
+    return _park_hold_and_respond(request.driver, sid,
+                                  request.get_json(silent=True) or {})
+
+
+@app.route('/api/park/allocate', methods=['POST'])
+@_driver_auth_required
+def api_park_allocate():
+    """Book WITHOUT picking an exact slot. The client sends a `preference`
+    (auto / zone / block) and the server assigns the best available slot in the
+    driver's scope, then runs the same hold+OTP flow as an exact-slot booking.
+    Spec §3 B/C/H (select zone, select floor, auto-allocation)."""
     drv = request.driver
     data = request.get_json(silent=True) or {}
+    pref = (data.get('preference') or 'auto').lower()
+    slot = company.pick_slot_for(
+        drv, preference=pref,
+        block_id=data.get('block_id'), zone_id=data.get('zone_id'),
+        slot_type=(data.get('slot_type') or '').strip() or None)
+    if not slot:
+        return jsonify({"error": "No available slot matches your preference right now.",
+                        "code": "none_available"}), 409
+    return _park_hold_and_respond(drv, slot.id, data)
+
+
+def _park_hold_and_respond(drv, sid, data):
+    """Shared hold+snapshot+OTP flow used by both exact-slot hold and
+    preference-based allocate. Returns a Flask JSON response."""
     plate = (data.get('plate') or drv.primary_plate or '').strip().upper()
     vtype = (data.get('vehicle_type') or drv.primary_type or 'Car').strip()
     if not plate:
@@ -6431,6 +6456,13 @@ def api_park_vehicles():
                     make=(d.get('make') or '').strip() or None,
                     model=(d.get('model') or '').strip() or None,
                     color=(d.get('color') or '').strip() or None,
+                    category=(d.get('category') or '').strip() or None,
+                    fuel_type=(d.get('fuel_type') or '').strip() or None,
+                    is_ev=bool(d.get('is_ev')),
+                    ev_charging=bool(d.get('ev_charging')),
+                    rfid_tag=(d.get('rfid_tag') or '').strip() or None,
+                    qr_id=(d.get('qr_id') or '').strip() or None,
+                    active=d.get('active', True) is not False,
                     is_primary=bool(d.get('is_primary')) or first)
         db.session.add(v)
         db.session.commit()
@@ -6450,9 +6482,14 @@ def api_park_vehicle(vid):
         db.session.commit()
         return jsonify({"status": "ok"})
     d = request.get_json(silent=True) or {}
-    for fld, key in (('vehicle_type', 'type'), ('make', 'make'), ('model', 'model'), ('color', 'color')):
+    for fld, key in (('vehicle_type', 'type'), ('make', 'make'), ('model', 'model'),
+                     ('color', 'color'), ('category', 'category'),
+                     ('fuel_type', 'fuel_type'), ('rfid_tag', 'rfid_tag'), ('qr_id', 'qr_id')):
         if key in d:
             setattr(v, fld, (d.get(key) or '').strip() or None)
+    for fld in ('is_ev', 'ev_charging', 'active'):
+        if fld in d:
+            setattr(v, fld, bool(d.get(fld)))
     if d.get('is_primary'):
         Vehicle.query.filter_by(driver_id=drv.id).update({'is_primary': False})
         v.is_primary = True

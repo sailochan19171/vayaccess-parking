@@ -224,6 +224,16 @@ def migrate_schema(engine):
     driver_notifications_new = [
         ("event_key", "VARCHAR(120)"),
     ]
+    # Vehicle Master extensions (added 2026-09-22).
+    vehicles_new = [
+        ("category",    "VARCHAR(40)"),
+        ("fuel_type",   "VARCHAR(20)"),
+        ("is_ev",       "BOOLEAN"),
+        ("ev_charging", "BOOLEAN"),
+        ("rfid_tag",    "VARCHAR(60)"),
+        ("qr_id",       "VARCHAR(60)"),
+        ("active",      "BOOLEAN"),
+    ]
 
     def _existing_cols(conn, table):
         if dialect == 'sqlite':
@@ -246,7 +256,8 @@ def migrate_schema(engine):
                             ('driver_users',          driver_users_new),
                             ('parking_slots',         parking_slots_new),
                             ('driver_reservations',   driver_reservations_new),
-                            ('driver_notifications',  driver_notifications_new)):
+                            ('driver_notifications',  driver_notifications_new),
+                            ('vehicles',              vehicles_new)):
             existing = _existing_cols(conn, table)
             # Skip tables that don't exist yet — db.create_all() (called right
             # after migrate_schema) will create them with the full column set,
@@ -1360,11 +1371,21 @@ class Vehicle(db.Model):
     id           = db.Column(db.Integer, primary_key=True)
     driver_id    = db.Column(db.Integer, nullable=False, index=True)
     plate        = db.Column(db.String(50), nullable=False, index=True)
-    vehicle_type = db.Column(db.String(20), nullable=True, default='Car')  # Car / Bike
+    vehicle_type = db.Column(db.String(20), nullable=True, default='Car')  # Car / Bike (4W / 2W)
     make         = db.Column(db.String(60), nullable=True)
     model        = db.Column(db.String(60), nullable=True)
     color        = db.Column(db.String(40), nullable=True)
     is_primary   = db.Column(db.Boolean, default=False)
+    # ── Vehicle Master extensions (added 2026-09-22) ──────────────────────────
+    # sub-category (Hatchback/Sedan/SUV/MUV/Luxury/Pickup/Commercial for 4W;
+    # Motorcycle/Scooter/Electric scooter/Other for 2W)
+    category     = db.Column(db.String(40), nullable=True)
+    fuel_type    = db.Column(db.String(20), nullable=True)   # Petrol/Diesel/CNG/EV/Hybrid
+    is_ev        = db.Column(db.Boolean, default=False)
+    ev_charging  = db.Column(db.Boolean, default=False)      # charging required on park
+    rfid_tag     = db.Column(db.String(60), nullable=True, index=True)  # RFID/UHF tag id
+    qr_id        = db.Column(db.String(60), nullable=True)   # printed QR sticker id
+    active       = db.Column(db.Boolean, default=True)
     created_at   = db.Column(db.DateTime, default=datetime.utcnow)
     __table_args__ = (db.UniqueConstraint('driver_id', 'plate', name='uq_vehicle_driver_plate'),)
 
@@ -1373,6 +1394,13 @@ class Vehicle(db.Model):
             "id":       self.id,
             "plate":    self.plate,
             "type":     self.vehicle_type or "Car",
+            "category": self.category or "",
+            "fuel_type": self.fuel_type or "",
+            "is_ev":    bool(self.is_ev),
+            "ev_charging": bool(self.ev_charging),
+            "rfid_tag": self.rfid_tag or "",
+            "qr_id":    self.qr_id or "",
+            "active":   bool(self.active) if self.active is not None else True,
             "make":     self.make or "",
             "model":    self.model or "",
             "color":    self.color or "",
