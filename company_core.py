@@ -16,7 +16,7 @@ from datetime import datetime
 from database import (
     db, Yard, Company, CompanyAllocation, DriverUser, ParkingBlock, ParkingZone,
     ParkingSlot, DriverReservation, AuditEvent, Setting, Vehicle, Tariff,
-    SLOT_AVAILABLE,
+    Organization, SLOT_AVAILABLE,
 )
 import parking_core as park
 
@@ -98,6 +98,15 @@ def master_data(driver):
     loc_id = driver.location_id or (company.yard_id if company else None)
     location = db.session.get(Yard, loc_id) if loc_id else None
 
+    # The organization this employee maps to (their own, else their company's).
+    # Exposed so the app can show the org name + whether entries need gatekeeper
+    # approval — mirrors the admin mapping on the mobile side.
+    oid = getattr(driver, 'organization_id', None) or (company.organization_id if company else None)
+    org_obj = db.session.get(Organization, oid) if oid else None
+    organization = ({"id": org_obj.id, "name": org_obj.name,
+                     "requires_gatekeeper_approval": bool(org_obj.requires_gatekeeper_approval)}
+                    if org_obj else None)
+
     my_slots = slots_query_for_driver(driver).all()
     block_ids = sorted({s.block_id for s in my_slots})
     blocks = (ParkingBlock.query.filter(ParkingBlock.id.in_(block_ids)).all()
@@ -136,6 +145,7 @@ def master_data(driver):
         "user": driver.to_dict(),
         "location": location.to_dict() if location else None,
         "company": company.to_dict() if company else None,
+        "organization": organization,
         "basements": basements,
         "allocatedSlots": slots,
         "vehicles": vehicles,

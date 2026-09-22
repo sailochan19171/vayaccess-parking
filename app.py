@@ -5992,6 +5992,7 @@ def api_park_locations():
         out.append({
             "id": y.id, "name": y.name, "location": y.location or "",
             "region": y.region or "", "site_type": y.site_type or "",
+            "category": y.category or "",
             "blocks": blocks, "total_slots": len(slots), "available": avail,
         })
     return jsonify(out)
