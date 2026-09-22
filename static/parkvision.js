@@ -167,6 +167,7 @@ function switchView(name) {
     'driver-users': 'Driver Users (Mobile)',
     'park-book': 'Book Parking',      'park-live': 'Live Parking Dashboard',
     'park-setup': 'Parking Setup',    'park-companies': 'Companies & Allocation',
+    'park-orgs': 'Organizations & Gatekeepers',
     'park-bookings': 'Parking Bookings', 'park-reports': 'Parking Reports',
   };
   $('view-title').textContent = titleMap[name] || 'Home Page';
@@ -5769,5 +5770,165 @@ document.addEventListener('DOMContentLoaded', function () {
       else if (n === 'park-bookings') pbgEnter();
       else if (n === 'park-reports') prepEnter();
     };
+  }
+})();
+
+// ═══════════ SMART PARKING ADMIN: Organizations & Gatekeepers ════════════════
+// An organization is the top tenant. Gatekeepers are allocated to organizations
+// (not companies) and approve/reject employee entries across every company in
+// them. Mirrors the Companies & Allocation module's conventions.
+(function () {
+  var g = function (id) { return document.getElementById(id); };
+  var esc = window._esc || function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+  };
+  var toastFn = function (m, k) { if (typeof toast === 'function') toast(m, k || 'ok'); };
+  function aget(url) { return fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }); }
+  function asend(url, method, body) {
+    return fetch(url, { method: method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }).catch(function () { return { ok: r.ok, d: {} }; }); });
+  }
+  function active(id) { var el = g(id); return el && el.classList.contains('active'); }
+
+  var org = { gkOrg: null, gkName: '' };
+
+  function porgEnter() {
+    if (!active('park-orgs')) return;
+    porgLoad();
+  }
+  function porgLoad() {
+    aget('/api/admin/organizations').then(function (rows) {
+      var el = g('porg-list');
+      if (!rows || !rows.length) { el.innerHTML = '<div class="pk-empty">No organizations yet. Use “+ Add Organization”.</div>'; return; }
+      el.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>' +
+        '<th>Organization</th><th>Code</th><th>Approval</th><th>Facilities</th><th>Companies</th><th>Employees</th><th>Gatekeepers</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows.map(function (o) {
+          var ap = o.requires_gatekeeper_approval
+            ? '<span class="pk-badge" style="background:#fef3c7;color:#92400e">Required</span>'
+            : '<span class="pk-badge">Auto</span>';
+          return '<tr><td><b>' + esc(o.name) + '</b></td><td>' + esc(o.code || '—') + '</td><td>' + ap + '</td>' +
+            '<td>' + (o.facilities || 0) + '</td><td>' + (o.companies || 0) + '</td><td>' + (o.employees || 0) + '</td>' +
+            '<td>' + (o.gatekeepers || 0) + '</td><td>' + esc(o.status) + '</td><td style="white-space:nowrap">' +
+            '<button class="pk-btn pk-btn-sm" data-gk="' + o.id + '" data-name="' + esc(o.name) + '">Gatekeepers</button> ' +
+            '<button class="pk-btn pk-btn-sm" data-appr="' + o.id + '" data-on="' + (o.requires_gatekeeper_approval ? 1 : 0) + '">' +
+              (o.requires_gatekeeper_approval ? 'Approval: ON' : 'Approval: OFF') + '</button> ' +
+            '<button class="pk-btn pk-btn-sm" data-edit="' + o.id + '" data-name="' + esc(o.name) + '" data-code="' + esc(o.code || '') + '" data-status="' + esc(o.status) + '">Edit</button> ' +
+            '<button class="pk-btn pk-btn-sm pk-btn-danger" data-del="' + o.id + '">Delete</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
+      el.querySelectorAll('[data-gk]').forEach(function (b) { b.addEventListener('click', function () { porgOpenGk(parseInt(b.dataset.gk, 10), b.dataset.name); }); });
+      el.querySelectorAll('[data-appr]').forEach(function (b) { b.addEventListener('click', function () { porgToggleApproval(parseInt(b.dataset.appr, 10), b.dataset.on === '1'); }); });
+      el.querySelectorAll('[data-edit]').forEach(function (b) { b.addEventListener('click', function () { porgEdit(b.dataset); }); });
+      el.querySelectorAll('[data-del]').forEach(function (b) { b.addEventListener('click', function () { porgDelete(parseInt(b.dataset.del, 10)); }); });
+    }).catch(function () {});
+  }
+  function porgAdd() {
+    var name = window.prompt('Organization name (e.g. Prestige Skytech):'); if (!name) return;
+    var code = window.prompt('Short code (optional, e.g. PST):') || '';
+    var appr = window.confirm('Require gatekeeper approval for every entry in this organization?\n\nOK = required (a gatekeeper must admit each booking)\nCancel = auto (employees self check-in as today)');
+    asend('/api/admin/organizations', 'POST', { name: name, code: code, requires_gatekeeper_approval: appr }).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
+      toastFn('Organization added.'); porgLoad();
+    });
+  }
+  function porgEdit(ds) {
+    var id = parseInt(ds.edit, 10);
+    var nm = window.prompt('Organization name:', ds.name); if (nm === null) return;
+    var code = window.prompt('Short code:', ds.code || '');
+    var st = window.prompt('Status (active / inactive):', ds.status || 'active') || 'active';
+    asend('/api/admin/organizations/' + id, 'PUT', { name: nm, code: code, status: st }).then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn('Saved.'); porgLoad();
+    });
+  }
+  function porgToggleApproval(id, isOn) {
+    asend('/api/admin/organizations/' + id, 'PUT', { requires_gatekeeper_approval: !isOn }).then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn(!isOn ? 'Gatekeeper approval turned ON.' : 'Gatekeeper approval turned OFF.'); porgLoad();
+    });
+  }
+  function porgDelete(id) {
+    if (!window.confirm('Delete this organization? Gatekeeper allocations are removed; facilities/companies keep working but are no longer grouped. Booking history is kept.')) return;
+    asend('/api/admin/organizations/' + id, 'DELETE').then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn('Deleted.'); g('porg-gk').hidden = true; porgLoad();
+    });
+  }
+
+  // ── Gatekeepers per organization ────────────────────────────────────────────
+  function porgOpenGk(oid, name) {
+    org.gkOrg = oid; org.gkName = name; g('porg-gk').hidden = false;
+    g('porg-gk-title').textContent = 'Gatekeepers · ' + name;
+    porgLoadGk();
+  }
+  function porgLoadGk() {
+    Promise.all([aget('/api/admin/organizations/' + org.gkOrg + '/gatekeepers'),
+                 aget('/api/admin/drivers')]).then(function (r) {
+      var rows = r[0] || [], drivers = r[1] || [];
+      var el = g('porg-gk-rows');
+      var activeRows = rows.filter(function (x) { return x.active; });
+      var gkTbl = activeRows.length
+        ? '<table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th></th></tr></thead><tbody>' +
+          activeRows.map(function (u) {
+            return '<tr><td><b>' + esc(u.name) + '</b></td><td>' + esc(u.email) + '</td><td>' + esc(u.phone || '') + '</td>' +
+              '<td><button class="pk-btn pk-btn-sm pk-btn-danger" data-revoke="' + u.gatekeeper_id + '">Remove</button></td></tr>';
+          }).join('') + '</tbody></table>'
+        : '<div class="pk-empty">No gatekeepers yet. Use “+ Add Gatekeeper”.</div>';
+      // Assign an existing driver who is not already an active gatekeeper here.
+      var assigned = {}; activeRows.forEach(function (x) { assigned[x.gatekeeper_id] = 1; });
+      var candidates = drivers.filter(function (u) { return !assigned[u.id]; }).slice(0, 50);
+      var asTbl = candidates.length
+        ? '<h4 style="margin:14px 0 6px">Assign an existing user as gatekeeper</h4><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead><tbody>' +
+          candidates.map(function (u) {
+            return '<tr><td>' + esc(u.name) + '</td><td>' + esc(u.email) + '</td><td>' + esc(u.role || 'employee') + '</td>' +
+              '<td><button class="pk-btn pk-btn-sm" data-assign="' + u.id + '">Assign</button></td></tr>';
+          }).join('') + '</tbody></table>'
+        : '';
+      el.innerHTML = '<div style="overflow-x:auto">' + gkTbl + asTbl + '</div>';
+      el.querySelectorAll('[data-revoke]').forEach(function (b) { b.addEventListener('click', function () { porgRevokeGk(parseInt(b.dataset.revoke, 10)); }); });
+      el.querySelectorAll('[data-assign]').forEach(function (b) { b.addEventListener('click', function () { porgAssignGk(parseInt(b.dataset.assign, 10)); }); });
+    }).catch(function () {});
+  }
+  function porgAddGk() {
+    if (!org.gkOrg) return;
+    var name = window.prompt('Gatekeeper name:'); if (!name) return;
+    var email = window.prompt('Login email:'); if (!email) return;
+    var pwd = window.prompt('Password (min 6 chars):'); if (!pwd) return;
+    var phone = window.prompt('Phone (optional):') || '';
+    asend('/api/admin/organizations/' + org.gkOrg + '/gatekeepers', 'POST',
+      { name: name, email: email, password: pwd, phone: phone }).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
+      window.alert('Gatekeeper created for ' + org.gkName + '.\n\nEmail: ' + email + '\nPassword: ' + pwd + '\n\nThey sign in on the app and get the gatekeeper dashboard for this organization.');
+      porgLoadGk(); porgLoad();
+    });
+  }
+  function porgAssignGk(uid) {
+    asend('/api/admin/organizations/' + org.gkOrg + '/gatekeepers', 'POST', { gatekeeper_id: uid }).then(function (res) {
+      if (!res.ok || (res.d && res.d.status === 'error')) { toastFn((res.d && res.d.message) || 'Failed.', 'error'); return; }
+      toastFn('Gatekeeper assigned.'); porgLoadGk(); porgLoad();
+    });
+  }
+  function porgRevokeGk(gid) {
+    if (!window.confirm('Remove this gatekeeper from ' + org.gkName + '? They keep their account but lose access to this organization.')) return;
+    asend('/api/admin/organizations/' + org.gkOrg + '/gatekeepers/' + gid, 'DELETE').then(function (res) {
+      if (!res.ok) { toastFn('Failed.', 'error'); return; }
+      toastFn('Removed.'); porgLoadGk(); porgLoad();
+    });
+  }
+
+  function porgInit() {
+    var add = g('porg-add'); if (add && !add._w) { add._w = 1; add.addEventListener('click', porgAdd); }
+    var gadd = g('porg-gk-add'); if (gadd && !gadd._w) { gadd._w = 1; gadd.addEventListener('click', porgAddGk); }
+    var gcl = g('porg-gk-close'); if (gcl && !gcl._w) { gcl._w = 1; gcl.addEventListener('click', function () { g('porg-gk').hidden = true; }); }
+    var btn = document.querySelector('.nav-item[data-view="park-orgs"]');
+    if (btn && !btn._w) { btn._w = 1; btn.addEventListener('click', porgEnter); }
+    if (active('park-orgs')) porgEnter();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', porgInit); else porgInit();
+  if (typeof switchView === 'function') {
+    var _origO = switchView;
+    switchView = function (n) { _origO(n); if (n === 'park-orgs') porgEnter(); };
   }
 })();
